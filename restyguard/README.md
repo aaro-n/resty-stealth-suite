@@ -36,7 +36,7 @@
 
 在公网上，本容器 **100% 仅暴露、仅监听 443 一个物理端口**。原本危险的 `8443` 管理端口和明文裸奔的 `8080` 调试端口完全被隐藏在容器内部的本地环回接口上，外界扫描器完全不可见。
 
-当外部用户访问 `RG_AUTH_DOMAIN`（管理域名，如 `gkp-auth.example.com`）时，四层流网关通过 SNI 预读自动将其识别并放行，绕过白名单直接接力给内部的 `127.0.0.1:8443` 控制台，在保护业务安全的同时，实现了完美的单端口全隐形安全。
+当外部用户访问 `RG_AUTH_DOMAIN`（管理域名，如 `auth.yourdomain.com`）时，四层流网关通过 SNI 预读自动将其识别并放行，绕过白名单直接接力给内部的 `127.0.0.1:8443` 控制台，在保护业务安全的同时，实现了完美的单端口全隐形安全。
 
 ---
 
@@ -65,7 +65,7 @@ docker build -t restyguard .
 ```bash
 docker run -d --name my-restyguard \
   -e RG_SECRET_TOKEN="your-strong-secret-here" \
-  -e RG_AUTH_DOMAIN="gkp-auth.example.com" \
+  -e RG_AUTH_DOMAIN="auth.yourdomain.com" \
   -e RG_STREAM_UPSTREAM_RULES="translate.googleapis.com=translate.googleapis.com:443" \
   -p 443:443 \
   restyguard
@@ -125,11 +125,11 @@ docker run -d --name my-restyguard \
 直接在浏览器地址栏中，输入您手机 Google 验证器上的 6 位数字验证码：
 
 ```http
-https://gkp-auth.example.com/auth/my-secure-token-12345?u=bob&code=123456
+https://auth.yourdomain.com/auth/my-secure-token-12345?u=bob&code=123456
 ```
 
 *   **洗刷与跳转**：页面加载成功的瞬间，Lua 会在您的浏览器中埋入 30 天滑动有效的安全 Cookie 锁，并**立刻执行 302 重定向**跳转到纯净短链接：
-    `https://gkp-auth.example.com/auth/my-secure-token-12345`。
+    `https://auth.yourdomain.com/auth/my-secure-token-12345`。
     明文参数在地址栏停留时间少于 0.1 秒，完美洗刷痕迹！
 *   **黑客刺探**：不提供口令或口令过期试探 ➔ Nginx **绝对不弹出 401 对话框暴露大闸指纹**，而是静默、高保真地反代您的网盘后端，安全等级极高。
 
@@ -138,7 +138,7 @@ https://gkp-auth.example.com/auth/my-secure-token-12345?u=bob&code=123456
 在此期间，您**不再需要**带上任何 `?u=` 或 `&code=` 参数，直接在书签里访问纯净短链接即可免密加白、免密管理：
 
 ```http
-https://gkp-auth.example.com/auth/my-secure-token-12345
+https://auth.yourdomain.com/auth/my-secure-token-12345
 ```
 
 ---
@@ -159,7 +159,7 @@ https://gkp-auth.example.com/auth/my-secure-token-12345
 ```javascript
 javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFIX";var token="YOUR_SECRET_TOKEN";var username="YOUR_PROXY_USERNAME";var baseUrl="https://"+domain+"/"+prefix+"/"+token;if(window.location.href.indexOf(domain)!==-1){if(document.cookie.indexOf("gkp_active=1")!==-1){window.location.reload();}else{var code=prompt("🔑 [RestyGuard 双重验证]\n\n您的 30 天免密已过期。\n请输入您手机 App (Google Authenticator) 上的 6 位动态验证码：");if(code&&/^\d{6}$/.test(code)){window.location.href=baseUrl+"?u="+username+"&code="+code;}}}else{var code=prompt("🔑 [RestyGuard 智能免密通道]\n\n若当前已处于 30 天免密期内，可直接不输入并点“确定/回车”直入后台。\n\n新设备请直接输入您手机上的 6 位动态验证码：");if(code===""){window.location.href=baseUrl;}else if(code&&/^\d{6}$/.test(code)){window.location.href=baseUrl+"?u="+username+"&code="+code;}}})();
 ```
-*(注：使用时请将上述三处 `gkp-auth.example.com` 替换为您在 `fly.toml` 里的真实控制台域名即可永久畅行！)*
+*(注：使用时请将上述的配置替换为您自己的真实控制台域名即可永久畅行！)*
 
 ---
 
@@ -168,7 +168,7 @@ javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFI
 由于 8080 端口已被彻底废除并公网全隐形，IP 诊断服务已安全收拢。在已加白或 CF Bypass 后，只需访问：
 
 ```bash
-curl https://gkp-auth.example.com/ip
+curl https://auth.yourdomain.com/ip
 ```
 
 即可得到高安全的客户端真实 IP 精准识别及 CDN 标头调试数据。
