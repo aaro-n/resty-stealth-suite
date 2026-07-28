@@ -63,8 +63,15 @@ jobs:
           LATEST_VERSION=$(echo "$LATEST_TAG" | sed 's/-alpine//')
           CURRENT_VERSION=$(cat version 2>/dev/null || echo "0.0.0")
 
+          # 4. 动态提取出大版本号（例如从 1.31.1.1-1 提取出前两位的 1.31）
+          MAJOR_VERSION=$(echo "$LATEST_VERSION" | cut -d. -f1,2)
+
           echo "官方最新底层 OpenResty 1.31 子版本: $LATEST_VERSION"
+          echo "动态解析出的大版本号: $MAJOR_VERSION"
           echo "我们当前构建过的历史版本: $CURRENT_VERSION"
+
+          # 传递大版本号给后续步骤
+          echo "major_version=${MAJOR_VERSION}" >> $GITHUB_OUTPUT
 
           # 手动触发时支持强制构建
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force_build }}" = "true" ]; then
@@ -88,14 +95,16 @@ jobs:
         if: steps.fetch-version.outputs.skip_build == 'false'
         run: |
           LATEST_VERSION=${{ steps.fetch-version.outputs.latest_version }}
+          MAJOR_VERSION=${{ steps.fetch-version.outputs.major_version }}
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}"
 
           echo "构建多架构镜像: linux/amd64, linux/arm64"
-          echo "标签: latest, ${LATEST_VERSION}, ${LATEST_VERSION}-${TIMESTAMP}"
+          echo "标签: latest, ${MAJOR_VERSION}, ${LATEST_VERSION}, ${LATEST_VERSION}-${TIMESTAMP}"
 
           docker buildx build --platform linux/amd64,linux/arm64 \
             -t ${REPO}:latest \
+            -t ${REPO}:${MAJOR_VERSION} \
             -t ${REPO}:${LATEST_VERSION} \
             -t ${REPO}:${LATEST_VERSION}-${TIMESTAMP} \
             --push ${{ matrix.context }}
