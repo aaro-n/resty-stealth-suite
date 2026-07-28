@@ -17,16 +17,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: restyguard
-            context: ./restyguard
-            image: resty-guard
-          - name: restytunnel
-            context: ./restytunnel
-            image: resty-tunnel
 
     steps:
       - name: 检出仓库
@@ -70,44 +60,52 @@ jobs:
           echo "动态解析出的大版本号: $MAJOR_VERSION"
           echo "我们当前构建过的历史版本: $CURRENT_VERSION"
 
-          # 传递大版本号给后续步骤
+          # 传递版本号给后续步骤
           echo "major_version=${MAJOR_VERSION}" >> $GITHUB_OUTPUT
+          echo "latest_version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
 
           # 手动触发时支持强制构建
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force_build }}" = "true" ]; then
             echo "检测到手动触发-强制构建"
             echo "skip_build=false" >> $GITHUB_OUTPUT
-            echo "latest_version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
           elif [ "${{ github.event_name }}" = "push" ]; then
             echo "检测到代码提交，触发自动构建以同步最新代码"
             echo "skip_build=false" >> $GITHUB_OUTPUT
-            echo "latest_version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
           elif [ "$LATEST_VERSION" = "$CURRENT_VERSION" ]; then
             echo "官方底层版本未发生更新，且无新代码提交，跳过本次构建"
             echo "skip_build=true" >> $GITHUB_OUTPUT
           else
             echo "发现官方 OpenResty 底层发布了新补丁版本: $LATEST_VERSION"
             echo "skip_build=false" >> $GITHUB_OUTPUT
-            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
           fi
 
-      - name: 构建并推送 Docker 镜像 (Premium)
+      - name: 构建并推送 Docker 镜像
         if: steps.fetch-version.outputs.skip_build == 'false'
         run: |
           LATEST_VERSION=${{ steps.fetch-version.outputs.latest_version }}
           MAJOR_VERSION=${{ steps.fetch-version.outputs.major_version }}
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
-          REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}"
+          
+          # 定义需要构建的子模块矩阵（单 Job 内顺序构建，杜绝推送冲突）
+          modules=("restyguard" "restytunnel")
+          images=("resty-guard" "resty-tunnel")
 
-          echo "构建多架构镜像: linux/amd64, linux/arm64"
-          echo "标签: latest, ${MAJOR_VERSION}, ${LATEST_VERSION}, ${LATEST_VERSION}-${TIMESTAMP}"
+          for i in "${!modules[@]}"; do
+            CONTEXT="./${modules[$i]}"
+            IMAGE_NAME="${images[$i]}"
+            REPO="${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}"
 
-          docker buildx build --platform linux/amd64,linux/arm64 \
-            -t ${REPO}:latest \
-            -t ${REPO}:${MAJOR_VERSION} \
-            -t ${REPO}:${LATEST_VERSION} \
-            -t ${REPO}:${LATEST_VERSION}-${TIMESTAMP} \
-            --push ${{ matrix.context }}
+            echo "=> 正在为组件 [${modules[$i]}] 构建多架构镜像: linux/amd64, linux/arm64"
+            echo "   目标镜像名: ${REPO}"
+            echo "   应用标签: latest, ${MAJOR_VERSION}, ${LATEST_VERSION}, ${LATEST_VERSION}-${TIMESTAMP}"
+
+            docker buildx build --platform linux/amd64,linux/arm64 \
+              -t ${REPO}:latest \
+              -t ${REPO}:${MAJOR_VERSION} \
+              -t ${REPO}:${LATEST_VERSION} \
+              -t ${REPO}:${LATEST_VERSION}-${TIMESTAMP} \
+              --push "${CONTEXT}"
+          done
 
       - name: 更新仓库文件 (Version & Time)
         if: steps.fetch-version.outputs.skip_build == 'false'
@@ -128,7 +126,7 @@ jobs:
           echo "$current_time" > time
           git add time
 
-          # 采用 pull --rebase 极效化规避多 matrix 并行推送冲突，确保完美入库
-          git commit -m "chore: [${{ matrix.name }}] 镜像版本更新为 $LATEST_VERSION - 北京时间: $current_time" || echo "没有变更"
+          # 此时处于单个串行作业，pull --rebase 即使重试也绝不会再发生多路冲突，平滑写入
+          git commit -m "chore: 镜像版本同步更新为 $LATEST_VERSION - 北京时间: $current_time" || echo "没有变更"
           git pull --rebase origin main
           git push origin main
