@@ -23,10 +23,10 @@ jobs:
         include:
           - name: restyguard
             context: ./restyguard
-            image: aaronlee/resty-guard
+            image: resty-guard
           - name: restytunnel
             context: ./restytunnel
-            image: aaronlee/resty-tunnel
+            image: resty-tunnel
 
     steps:
       - name: 检出仓库
@@ -45,13 +45,15 @@ jobs:
         id: fetch-version
         run: |
           # 从上游 Docker Hub 获取当前镜像的最新 tag 版本
-          RESPONSE=$(wget -qO- https://hub.docker.com/v2/repositories/${{ matrix.image }}/tags 2>/dev/null || echo "")
+          # 动态拼接用户真实的 DOCKERHUB_USERNAME
+          FULL_IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}"
+          RESPONSE=$(wget -qO- "https://hub.docker.com/v2/repositories/${FULL_IMAGE}/tags" 2>/dev/null || echo "")
           if [ -z "$RESPONSE" ]; then
             echo "警告: 无法从 Docker Hub 获取版本信息"
           fi
 
           LATEST_VERSION=$(echo "$RESPONSE" | jq -r '.results[] | select(.name != "latest" and (.name | test("cache|rc|beta|alpha") | not)) | .name' | head -n1)
-          CURRENT_VERSION=$(cat ${{ matrix.context }}/version 2>/dev/null || echo "1.0.0")
+          CURRENT_VERSION=$(cat version 2>/dev/null || echo "1.0.0")
 
           # 如果线上还没有发布过任何 tag，默认设为当前本地版本
           if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" = "null" ]; then
@@ -69,7 +71,6 @@ jobs:
           elif [ "${{ github.event_name }}" = "push" ]; then
             echo "检测到代码提交，自动触发构建"
             echo "skip_build=false" >> $GITHUB_OUTPUT
-            # 如果是代码变更，我们可以在原版本基础上小幅提升，或者保持原版本
             echo "latest_version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
           elif [ "$LATEST_VERSION" = "$CURRENT_VERSION" ] && [ "${{ github.event_name }}" = "schedule" ]; then
             echo "定时触发：版本无变化，跳过构建"
@@ -80,37 +81,12 @@ jobs:
             echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
           fi
 
-      - name: 校验配置文件（不匹配则阻断构建）
-        id: compare-config
-        if: steps.fetch-version.outputs.skip_build == 'false'
-        run: |
-          # 这是一个极度智能的自适应校验，默认比较本地组件中的 README.md 与您 GitHub 仓库上的 Raw 线上版本是否对齐
-          # 生产环境您可以随时将其修改为您的真实配置文件（如 sql/config.yaml）和远程安全校验 URL
-          LOCAL_FILE="${{ matrix.context }}/README.md"
-          REMOTE_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/${{ matrix.context }}/README.md"
-
-          # 下载远程配置，如果因仓库刚创建暂时拿不到远程配置，则默认自动通过以保障首次构建成功
-          if ! curl -sSf "$REMOTE_URL" -o /tmp/remote_config.md 2>/dev/null; then
-            echo "⚠️ 提示: 尚未配置或无法获取远程校验文件（可能因为仓库为新创建），默认跳过安全阻断以保证首次构建成功。"
-            echo "config_ok=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # 严格比较
-          if cmp -s "$LOCAL_FILE" /tmp/remote_config.md; then
-            echo "配置文件与官方一致 ✅"
-            echo "config_ok=true" >> $GITHUB_OUTPUT
-          else
-            echo "⚠️ 配置文件不一致或已在本次 Push 中被修改，自动放行构建以应用最新配置"
-            echo "config_ok=true" >> $GITHUB_OUTPUT
-          fi
-
       - name: 构建并推送 Docker 镜像 (Premium)
-        if: steps.fetch-version.outputs.skip_build == 'false' && steps.compare-config.outputs.config_ok == 'true'
+        if: steps.fetch-version.outputs.skip_build == 'false'
         run: |
           LATEST_VERSION=${{ steps.fetch-version.outputs.latest_version }}
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
-          REPO="${{ matrix.image }}"
+          REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}"
 
           echo "构建多架构镜像: linux/amd64, linux/arm64"
           echo "标签: latest, ${LATEST_VERSION}, ${LATEST_VERSION}-${TIMESTAMP}"
@@ -122,7 +98,7 @@ jobs:
             --push ${{ matrix.context }}
 
       - name: 更新仓库文件 (Version & Time)
-        if: steps.fetch-version.outputs.skip_build == 'false' && steps.compare-config.outputs.config_ok == 'true'
+        if: steps.fetch-version.outputs.skip_build == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -131,14 +107,14 @@ jobs:
 
           LATEST_VERSION=${{ steps.fetch-version.outputs.latest_version }}
 
-          # 更新对应子项目下的版本号文件
-          echo "$LATEST_VERSION" > ${{ matrix.context }}/version
-          git add ${{ matrix.context }}/version
+          # 在全局根目录下保留唯一的 version 文件
+          echo "$LATEST_VERSION" > version
+          git add version
 
-          # 更新对应子项目下的时间戳
+          # 全局根目录下的 time 物理时间戳文件
           current_time=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M:%S")
-          echo "$current_time" > ${{ matrix.context }}/time
-          git add ${{ matrix.context }}/time
+          echo "$current_time" > time
+          git add time
 
           # 采用 pull --rebase 极效化规避多 matrix 并行推送冲突，确保完美入库
           git commit -m "chore: [${{ matrix.name }}] 镜像版本更新为 $LATEST_VERSION - 北京时间: $current_time" || echo "没有变更"
