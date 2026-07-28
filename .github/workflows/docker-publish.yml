@@ -44,24 +44,27 @@ jobs:
       - name: 获取最新版本
         id: fetch-version
         run: |
-          # 从上游 Docker Hub 获取当前镜像的最新 tag 版本
-          # 动态拼接用户真实的 DOCKERHUB_USERNAME
-          FULL_IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}"
-          RESPONSE=$(wget -qO- "https://hub.docker.com/v2/repositories/${FULL_IMAGE}/tags" 2>/dev/null || echo "")
-          if [ -z "$RESPONSE" ]; then
-            echo "警告: 无法从 Docker Hub 获取版本信息"
+          # 1. 自动从官方 openresty 仓库拉取 1.31 系列的 alpine 相关 tag 列表
+          RESPONSE=$(curl -s "https://hub.docker.com/v2/repositories/openresty/openresty/tags?page_size=100")
+          if [ -z "$RESPONSE" ] || [ "$(echo "$RESPONSE" | jq -r '.results' 2>/dev/null)" = "null" ]; then
+            echo "❌ 错误: 无法从 Docker Hub 获取官方 OpenResty 版本信息"
+            exit 1
           fi
 
-          LATEST_VERSION=$(echo "$RESPONSE" | jq -r '.results[] | select(.name != "latest" and (.name | test("cache|rc|beta|alpha") | not)) | .name' | head -n1)
-          CURRENT_VERSION=$(cat version 2>/dev/null || echo "1.0.0")
-
-          # 如果线上还没有发布过任何 tag，默认设为当前本地版本
-          if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" = "null" ]; then
-            LATEST_VERSION="$CURRENT_VERSION"
+          # 2. 筛选出标准的 1.31 系列 alpine 镜像标签（例如 1.31.1.1-1-alpine）
+          LATEST_TAG=$(echo "$RESPONSE" | jq -r '.results[].name' | grep -E '^1\.31\.[0-9.]+\-[0-9]+\-alpine$' | head -n1)
+          
+          if [ -z "$LATEST_TAG" ]; then
+            echo "❌ 错误: 未能在官方源中匹配到合规的 1.31 Alpine 标签"
+            exit 1
           fi
 
-          echo "当前版本: $CURRENT_VERSION"
-          echo "最新线上版本: $LATEST_VERSION"
+          # 3. 提取出具体的子版本号（例如从 1.31.1.1-1-alpine 提取出 1.31.1.1-1）
+          LATEST_VERSION=$(echo "$LATEST_TAG" | sed 's/-alpine//')
+          CURRENT_VERSION=$(cat version 2>/dev/null || echo "0.0.0")
+
+          echo "官方最新底层 OpenResty 1.31 子版本: $LATEST_VERSION"
+          echo "我们当前构建过的历史版本: $CURRENT_VERSION"
 
           # 手动触发时支持强制构建
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force_build }}" = "true" ]; then
@@ -69,14 +72,14 @@ jobs:
             echo "skip_build=false" >> $GITHUB_OUTPUT
             echo "latest_version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
           elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "检测到代码提交，自动触发构建"
+            echo "检测到代码提交，触发自动构建以同步最新代码"
             echo "skip_build=false" >> $GITHUB_OUTPUT
-            echo "latest_version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
-          elif [ "$LATEST_VERSION" = "$CURRENT_VERSION" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "定时触发：版本无变化，跳过构建"
+            echo "latest_version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          elif [ "$LATEST_VERSION" = "$CURRENT_VERSION" ]; then
+            echo "官方底层版本未发生更新，且无新代码提交，跳过本次构建"
             echo "skip_build=true" >> $GITHUB_OUTPUT
           else
-            echo "版本有变化或属于首次构建，开始执行构建"
+            echo "发现官方 OpenResty 底层发布了新补丁版本: $LATEST_VERSION"
             echo "skip_build=false" >> $GITHUB_OUTPUT
             echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
           fi
