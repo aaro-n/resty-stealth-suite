@@ -1,5 +1,5 @@
-# 使用本地缓存中已存在的 OpenResty 1.31.1.1 Alpine 镜像作为基础镜像
-FROM openresty/openresty:1.31.1.1-1-alpine
+# 使用本地缓存中已存在的 OpenResty 1.31 Alpine 镜像作为基础镜像
+FROM openresty/openresty:1.31-alpine
 
 # 安装 gettext(用于envsubst), procps/util-linux(用于unshare), apache2-utils(用于htpasswd), openssl(用于自签名保底证书)
 RUN apk add --no-cache gettext procps util-linux apache2-utils openssl
