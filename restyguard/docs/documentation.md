@@ -218,7 +218,7 @@ openssl req -x509 -new -nodes -key private-ca.key -sha256 -days 3650 \
 # 生成 Cloudflare 专用客户端私钥与证书签名请求 (CSR)
 openssl genrsa -out cf-client.key 2048
 openssl req -new -key cf-client.key \
-  -subj "/C=CN/O=MyPrivateAOP/CN=gkp-auth.example.com" -out cf-client.csr
+  -subj "/C=CN/O=MyPrivateAOP/CN=auth.yourdomain.com" -out cf-client.csr
 
 # 用您生成的私有 CA 签名生成 Cloudflare 专用客户端证书
 openssl x509 -req -in cf-client.csr -CA certs/ca.pem -CAkey private-ca.key \
@@ -244,7 +244,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/<YOUR_ZONE_ID>/client_c
 ---
 
 ### 5.3 方案 C：按主机名私有证书（极致安全、细粒度业务隔离）
-如果您需要极致的安全隔离，**只想对网关授权域名 `gkp-auth.example.com` 开启双向验证，而让其他子域名（如网盘 `api.example.com`）保持通用且不受任何阻断干扰**，可以使用该级别证书。
+如果您需要极致的安全隔离，**只想对网关授权域名 `auth.yourdomain.com` 开启双向验证，而让其他子域名（如网盘 `api.example.com`）保持通用且不受任何阻断干扰**，可以使用该级别证书。
 
 #### 1. 在本地机器一键生成专属主机名证书链：
 ```bash
@@ -256,7 +256,7 @@ openssl req -x509 -new -nodes -key private-ca.key -sha256 -days 3650 \
 # 生成 Cloudflare 专用客户端私钥与证书签名请求 (CSR)，通用名称锁定为子域名
 openssl genrsa -out hostname-cf-client.key 2048
 openssl req -new -key hostname-cf-client.key \
-  -subj "/C=CN/O=MyHostnameAOP/CN=gkp-auth.example.com" -out hostname-cf-client.csr
+  -subj "/C=CN/O=MyHostnameAOP/CN=auth.yourdomain.com" -out hostname-cf-client.csr
 
 # 用您生成的私有 CA 签名生成 Cloudflare 专属客户端证书
 openssl x509 -req -in hostname-cf-client.csr -CA certs/ca.pem -CAkey private-ca.key \
@@ -277,7 +277,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/<YOUR_ZONE_ID>/client_c
 
 #### 3. 在 Cloudflare 网页端激活与绑定：
 * 刷新 Cloudflare 的 **SSL/TLS** ➔ **Origin Server** ➔ **Authenticated Origin Pulls** 页面。
-* 在页面最底部的 **按主机名（Per-hostname）** 卡片中，找到刚上传的主机名证书，勾选关联 **`gkp-auth.example.com`**，并将开关切换为 **On**。
+* 在页面最底部的 **按主机名（Per-hostname）** 卡片中，找到刚上传的主机名证书，勾选关联 **`auth.yourdomain.com`**，并将开关切换为 **On**。
 
 ---
 
@@ -291,23 +291,23 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/<YOUR_ZONE_ID>/client_c
 
 $$\text{按主机名 (Per-Hostname)} > \text{区域级 (Zone-Level)} > \text{全局 (Global)}$$
 
-*   **访问已绑定“按主机名”的子域名（如 `gkp-auth.example.com`）**：Cloudflare 优先选择出示该主机名专属的特制 AOP 客户端证书。
+*   **访问已绑定“按主机名”的子域名（如 `auth.yourdomain.com`）**：Cloudflare 优先选择出示该主机名专属的特制 AOP 客户端证书。
 *   **访问未绑定“按主机名”的普通子域名（如网盘 `api.example.com`）**：Cloudflare 自动退避，选择出示 **区域级（Zone-level）** 证书（若区域级未配置，则出示 **全局共享证书**）。
 
 #### 2. ⚠️ 个人多业务混合场景下的“全域瘫痪”防雷避坑警告
 
 如果您将所有这些服务部署在**同一台 Fly.io 实例、同一个物理端口（如 443 统一入口）**上：
 
-*   **致命错误配置**：您在 Cloudflare 网页上**同时**开启了“全局/区域级”和“按主机名”，但您只在 Fly.io 服务器 Nginx 的 `certs/ca.pem` 中配置了专门为 `gkp-auth` 签发的私有 CA 证书。
-*   **后果**：由于 Nginx 不支持根据 SNI 动态在 TLS 握手层切换 `ssl_client_certificate` 的 CA（除非使用复杂的握手动态解析），当访客访问您的网盘 `api.example.com` 时，CF 只能出示“全局/区域级”证书回源，Nginx 会拿着 `gkp-auth` 的 CA 去对齐它，直接导致 **密码学验证失败并强行断连**，您的网盘将直接瘫痪！
+*   **致命错误配置**：您在 Cloudflare 网页上**同时**开启了“全局/区域级”和“按主机名”，但您只在 Fly.io 服务器 Nginx 的 `certs/ca.pem` 中配置了专门为 `auth` 签发的私有 CA 证书。
+*   **后果**：由于 Nginx 不支持根据 SNI 动态在 TLS 握手层切换 `ssl_client_certificate` 的 CA（除非使用复杂的握手动态解析），当访客访问您的网盘 `api.example.com` 时，CF 只能出示“全局/区域级”证书回源，Nginx 会拿着 `auth` 的 CA 去对齐它，直接导致 **密码学验证失败并强行断连**，您的网盘将直接瘫痪！
 
-#### 3. 🎯 终极完美配置实战方案（仅让 gkp-auth 开启 mTLS，网盘完全不受影响）
+#### 3. 🎯 终极完美配置实战方案（仅让 auth 开启 mTLS，网盘完全不受影响）
 
-如果您希望**只有 `gkp-auth` 启用高强度 mTLS 锁死，而其他二级子域名保持通用，且互不干扰**：
+如果您希望**只有 `auth` 启用高强度 mTLS 锁死，而其他二级子域名保持通用，且互不干扰**：
 
 1.  **Cloudflare 端**：
     *   **彻底关闭** 全局（Global）和 区域级（Zone-level）开关。
-    *   **仅在** 按主机名（Per-hostname）列表中，为子域名 `gkp-auth.example.com` 上传并单独绑定您私有的 AOP 客户端证书。
+    *   **仅在** 按主机名（Per-hostname）列表中，为子域名 `auth.yourdomain.com` 上传并单独绑定您私有的 AOP 客户端证书。
 2.  **服务端 Nginx 端配合（条件式双向校验）**：
     在 Nginx 的主配置文件中，配置证书双向校验模式为 **可选（optional）**，从而支持不带证书的握手（防止网盘访客被瞬间拒绝），随后在具体的 server {} 块里对特定域名执行强拦截：
 
@@ -318,7 +318,7 @@ $$\text{按主机名 (Per-Hostname)} > \text{区域级 (Zone-Level)} > \text{全
 
     # 2. 在门禁/授权管理虚拟主机块里，对未通过证书校验的请求强制阻断
     server {
-        server_name gkp-auth.example.com;
+        server_name auth.yourdomain.com;
         
         location / {
             if ($ssl_client_verify != SUCCESS) {
@@ -435,7 +435,7 @@ javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFI
 在 v3.9.0 迭代中，我们解决了一个极其硬核、隐蔽的**现代浏览器隐私保护与 Service Worker (SW) 叠加引发的控制台失效 Bug**。
 
 #### 💣 致命 Bug 复现链条
-1.  **高保真回落引火上身**：用户由于直接访问根目录或未授权，请求被 Nginx 静默 `ngx.exec("@fallback")` 转发给真实业务系统。因为真实业务是带有 PWA 缓存机制的单页应用 (SPA)，浏览器瞬间在本地注册了管理域名 `gkp-auth.example.com` 下的作用域为 `/` 的 Service Worker。
+1.  **高保真回落引火上身**：用户由于直接访问根目录或未授权，请求被 Nginx 静默 `ngx.exec("@fallback")` 转发给真实业务系统。因为真实业务是带有 PWA 缓存机制的单页应用 (SPA)，浏览器瞬间在本地注册了管理域名 `auth.yourdomain.com` 下的作用域为 `/` 的 Service Worker。
 2.  **302 跨站丢弃 Cookie**：用户随后通过书签跨站进行 TOTP 验证，Nginx 校验成功下发带有 `SameSite=Strict` 属性的 Cookie 并 302 重定向。但在**隐私模式**下，现代浏览器防弹跳追踪保护机制（Bounce Tracking Mitigation）会强制在跨站重定向链路中**清洗并丢弃**该 Cookie。
 3.  **SW 幽灵劫持**：浏览器在干净 URL 下因为缺少 Cookie，再次被 Nginx 静默转至 `@fallback`（即真实业务 SPA）。此时，已经被注册的 Service Worker 被激活，它强制将所有的非静态资源导航请求**用本地缓存的 index.html 覆盖**。最终，导致控制台永远无法呈现，而是反复套娃渲染出真实业务的主页，并在 2 秒内疯狂发起 API 以及 locales 多语言拉取请求。
 
@@ -443,7 +443,7 @@ javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFI
 我们通过在 `auth_handler.lua`、`auth_view.lua` 中进行以下三维一体重构，完美修复了此问题：
 
 1.  **废弃 302 重定向，改用 HTML/JS 落地页强跳**：
-    将原本的 `return ngx.redirect(..., 302)` 替换为直接返回 `200` 并附带一小段自刷新 HTML。这样，浏览器在当前 `gkp-auth` 域名下完成了真实的第一方页面落地，**完美破解了隐私模式下防弹跳追踪保护强制丢弃 Cookie 的限制**，使凭证 Cookie 能够稳稳写入！
+    将原本的 `return ngx.redirect(..., 302)` 替换为直接返回 `200` 并附带一小段自刷新 HTML。这样，浏览器在当前 `auth` 域名下完成了真实的第一方页面落地，**完美破解了隐私模式下防弹跳追踪保护强制丢弃 Cookie 的限制**，使凭证 Cookie 能够稳稳写入！
 2.  **响应头注入 `Clear-Site-Data: "storage"` 头物理杀毒**：
     在验证成功和首次写入 Cookie 时，下发：
     ```nginx
@@ -500,7 +500,7 @@ RG_NGINX_USERS = "admin:password_here,bob:TOTP:YOUR_BASE32_SECRET,charles:5678"
 1.  **手动添加**：
     *   在 Google Authenticator 手机 App 中点击右下角 **“+”** ➔ **输入设置密钥（Enter a setup key）**。
     *   **信息填写**：
-        *   **账号名称**：如 `gkp-auth.example.com`
+        *   **账号名称**：如 `auth.yourdomain.com`
         *   **您的密钥**：填入您在 `RG_NGINX_USERS` 中为该用户配置的 **Base32 种子密钥**（即上例中 bob 的 `MZXW6YTBOI2G64TE`）。*注意：种子密钥必须完全符合 Base32 标准，只包含大写字母 A-Z 和数字 2-7*。
         *   **类型**：保持默认的 **“基于时间（Time-based）”**（无需修改，步长保持标准的 30s）。
 2.  **扫码添加 (自制二维码)**：

@@ -18,7 +18,7 @@
 2. **`key.pem`** (服务端私钥)
    * **内容**：申请上述 15 年证书时生成的 Private Key (PEM 格式)
 3. **`ca.pem`** (客户端 CA 证书)
-   * **内容**：Cloudflare 提供的 mTLS CA 根证书，或您自定义生成的**区域级/主机名专属级**私有 CA 根证书。用于校验连接本网关的客户端证书合法性（如开启 CF Authenticated Origin Pulls 场景，对应锁死 gkp-auth.example.com）。
+   * **内容**：Cloudflare 提供的 mTLS CA 根证书，或您自定义生成的**区域级/主机名专属级**私有 CA 根证书。用于校验连接本网关的客户端证书合法性（如开启 CF Authenticated Origin Pulls 场景，对应锁死 auth.yourdomain.com）。
 
 ## 开发环境
 
