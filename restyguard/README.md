@@ -39,38 +39,87 @@
 
 ---
 
-## 快速开始
+## 快速开始 (Quick Start)
 
-### 前提条件
+我们强烈推荐使用 Docker Compose 进行一键部署，这能让您更方便地管理配置。
 
-- Docker
-- TLS 证书（推荐使用 Cloudflare 15年 Origin CA 证书与 mTLS 结合）
+### 1. 配置 (docker-compose.yml)
 
-### 1. 生成开发保底证书（首次运行可由容器在后台自动生成并开箱即用）
+首先，在 `restyguard` 目录下创建一个 `docker-compose.yml` 文件（如果不存在），或者修改现有文件。一个典型的配置如下：
 
-```bash
-# 也可手动使用项目提供的脚本生成：
-./scripts/generate-dev-certs.sh
+```yaml
+version: '3.8'
+
+services:
+  restyguard:
+    build:
+      context: .
+    image: restyguard
+    container_name: restyguard
+    restart: always
+    ports:
+      - "443:443"
+    volumes:
+      # 将您的 SSL 证书挂载到容器中
+      # 如果不挂载，容器将自动生成自签名证书
+      - ./certs:/etc/nginx/certs:ro
+      # 如果您使用静态文件来管理路由规则
+      - ./upstream_rules.conf:/etc/nginx/rules/upstream_rules.conf:ro
+    environment:
+      # --- 必需的核心配置 ---
+      - RG_SECRET_TOKEN=your-strong-secret-token-here # 【必需】设置一个强安全密令
+      
+      # --- 授权与伪装 ---
+      - RG_AUTH_DOMAIN=auth.yourdomain.com # 您的管理域名
+      - RG_FALLBACK_BACKEND=https://cn.bing.com # 伪装回落后端
+
+      # --- 路由规则 (推荐使用 RG_STREAM_UPSTREAM_RULES) ---
+      - RG_STREAM_UPSTREAM_RULES=*:translate.googleapis.com:443 # 示例：将所有未匹配的 SNI 流量转发到谷歌翻译
+      # - RG_STREAM_UPSTREAM_RULES=api.mydomain.com=192.168.1.10:8443,files.mydomain.com=192.168.1.11:443
+
+      # --- 安全与白名单 ---
+      - RG_ENABLE_IP_WHITELIST=true # 开启 IP 白名单
+      - RG_WHITELIST_IP_TTL_SECONDS=86400 # 白名单有效期 (24小时)
+      - RG_NGINX_USERS=user1:pass1,user2:TOTP:JBSWY3DPEHPK3PXP # 配置管理后台的多用户
+      
+      # --- 其他时区与日志配置 ---
+      - RG_TZ=Asia/Shanghai
+      - RG_NGINX_LOG_LEVEL=notice
 ```
 
-### 2. 构建 Docker 镜像
+> **⚠️ 安全警告：** `RG_SECRET_TOKEN` 必须设置一个复杂且唯一的密钥。不设置或使用默认值会导致容器拒绝启动。
+
+### 2. 准备证书 (可选)
+
+将您的 SSL 证书和私钥放入 `certs/` 目录：
+
+- `certs/cert.pem`
+- `certs/key.pem`
+
+如果您不提供证书，容器在首次启动时会自动生成一套自签名证书用于测试。
+
+### 3. 启动服务
+
+在 `restyguard` 目录下，执行以下命令：
 
 ```bash
-docker build -t restyguard .
+docker-compose up -d --build
 ```
 
-### 3. 运行容器 (推荐使用单端口 443 极简配置)
+### 备选方案：使用 `docker run`
+
+如果您不想使用 Docker Compose，也可以使用 `docker run` 命令：
 
 ```bash
 docker run -d --name my-restyguard \
   -e RG_SECRET_TOKEN="your-strong-secret-here" \
   -e RG_AUTH_DOMAIN="auth.yourdomain.com" \
-  -e RG_STREAM_UPSTREAM_RULES="translate.googleapis.com=translate.googleapis.com:443" \
+  -e RG_STREAM_UPSTREAM_RULES="*:translate.googleapis.com:443" \
+  -v "$(pwd)/certs":/etc/nginx/certs:ro \
   -p 443:443 \
   restyguard
 ```
 
-> **⚠️ 安全警告：** `RG_SECRET_TOKEN` 必须设置一个复杂且唯一的密钥。不设置或使用默认值会导致容器拒绝启动。
 
 ---
 
