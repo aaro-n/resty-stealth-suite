@@ -1,0 +1,104 @@
+env RG_WHITELIST_IP_TTL_SECONDS;
+env RG_STREAM_UPSTREAM_MAP;
+env RG_STREAM_UPSTREAM_RULES;
+env RG_UPSTREAM_RULES_FILE;
+env RG_NGINX_PROXY_PROTOCOL;
+env RG_SECRET_TOKEN;
+env RG_NGINX_CDN_IP_HEADERS;
+env RG_ENABLE_IP_WHITELIST;
+env RG_FALLBACK_BACKEND;
+env RG_AUTH_DOMAIN; # 🚀 [修复] 显式载入 AUTH_DOMAIN 环境变量，防止在四层 Stream LUA 中因读取为空导致授权域名被误拦截
+env RG_NGINX_SESSION_TTL_SECONDS; # 🚀 [新] 声明 Session 锁有效期变量
+env RG_TOTP_VALID_WINDOW_SECONDS; # 🚀 [新] 声明 TOTP 可校验的时间偏差窗口变量
+env RG_TOTP_SECRET; # 🚀 [新] 声明 TOTP 种子密钥变量
+env RG_NGINX_USERS; # 🚀 [新] 声明多用户静态账密/TOTP 配置列表变量
+
+# [新功能] 声明定时任务所需的环境变量
+env RG_TASK_CLEAN_LOG_INTERVAL_SECONDS;
+env RG_TASK_CLEAN_LOG_RETAIN_LINES;
+env RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS;
+
+# 以非特权用户运行 worker 进程，降低安全风险
+user root; # 🚀 运行用户改回 root 或具有 rules/ 目录读取权限的用户，以在 Alpine 下能够读取自定义路径文件
+worker_processes auto;
+worker_rlimit_nofile 20480; # 🎯 [高并发优化] 提升最大文件句柄限制，防止高吞吐时抛出 Too many open files 错误
+pid /run/nginx/nginx.pid;
+error_log /dev/stderr ${RG_NGINX_LOG_LEVEL}; # 🚀 [极致日志噪音优化] 将 error_log 级别设为动态注入变量。默认 notice 完美屏蔽 high 频回环 connected 日志，支持 info/warn 等自定义
+
+events { 
+    worker_connections 4096; # 🎯 [高并发优化]
+    multi_accept on;
+}
+
+http {
+
+    # 🚀 [极致性能与时延调优] 优化垃圾回收 (GC) 策略，保证内存紧凑，消除 GC 时延抖动
+    init_by_lua_block {
+        collectgarbage("setpause", 100)
+        collectgarbage("setstepmul", 500)
+    }
+
+    # 路径中添加新的 core 目录
+    lua_package_path "/app/nginx/lua/http/?.lua;/app/nginx/lua/core/?.lua;;";
+    
+    # [新功能] 在每个 Worker 进程启动时，运行我们的任务调度器
+    init_worker_by_lua_block {
+        require("scheduler").start()
+    }
+        
+    log_format validation_log '[$time_local] $final_real_client_ip - $remote_user - "$request" $status'
+                              ' (Provider:[$cdn_provider], CDN:[$cdn_client_ip], XFF:[$http_x_forwarded_for], Fly:[http_fly_client_ip], Final:[$final_real_client_ip])';
+    
+    access_log /dev/stdout validation_log;
+
+    # 🚀 [由于 HTTP Server 中不允许声明 map]
+    # 我们将 ip-to-whitelist 的 map 逻辑安全声明在 http {} 的最顶级域，实现全局合规编译
+    map $arg_ip $ip_to_whitelist { default $arg_ip; '' $final_real_client_ip; }
+
+    # 🎯 [极致性能与连接调优]
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    
+    # 🎯 [极致性能调优] 优化长连接池，消灭频繁建立连接的握手时延
+    keepalive_timeout  360s;
+    keepalive_requests 100000;
+    
+    # 🎯 [极致时延调优] 缩减 SSL 缓冲区包长，大幅提升小碎片文件的响应时延
+    ssl_buffer_size 4k;
+    
+    # 🎯 [极致速度调优] 瞬间释放超时的废弃网络连接
+    reset_timedout_connection on;
+
+    include /etc/nginx/conf.d/ip-validation.conf;
+    include /etc/nginx/conf.d/http.server-*.conf;
+}
+
+stream {
+    lua_package_path "/app/nginx/lua/stream/?.lua;;";
+
+    # 🚀 [极致性能调优：在 Worker 启动时提前预加载四层路由与白名单模块，彻底消除首包建立连接时的磁盘/内存盘 I/O 与 Lua 编译延迟抖动]
+    init_worker_by_lua_block {
+        require("upstream_rules")
+        require("check_whitelist")
+    }
+
+    open_log_file_cache max=10 inactive=20s valid=1m;
+
+    # 🚀 [极致可观测性：拦截日志带原因及目标 SNI 结构化打印]
+    log_format reject_log '[$time_local] $stream_client_ip - Reason: $block_reason - SNI: $ssl_preread_server_name';
+
+    # [修复] 定义一个用于条件日志的标志变量
+    # 如果状态码是 500 (被拒绝)，$log_rejected_ip 的值为 1，否则为 0。
+    map $status $log_rejected_ip {
+        500     1;
+        default 0;
+    }
+
+    log_format stream_log '[$time_local] $stream_client_ip ($remote_addr) - $protocol - $status - "$ssl_preread_server_name"';
+    
+    resolver 1.1.1.1 8.8.8.8 valid=${RG_NGINX_DNS_RESOLUTION_SECONDS}s;
+    resolver_timeout 5s;
+    
+    include /etc/nginx/stream.d/*.conf;
+}

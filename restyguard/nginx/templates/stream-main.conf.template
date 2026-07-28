@@ -1,0 +1,73 @@
+# 根据 PROXY Protocol 的状态，将正确的客户端 IP 映射到 $stream_client_ip 变量。
+# 这是一个基础的 IP 获取逻辑，它为后续的 Lua 脚本和日志记录提供了 IP 来源。
+map $proxy_protocol_addr $stream_client_ip {
+    # 如果 $proxy_protocol_addr 变量有值（即 PROXY Protocol 已启用并成功解析），
+    # 则使用这个值。`~.` 是一个正则表达式，匹配任何非空字符串。
+    ~.      $proxy_protocol_addr;
+    # 否则（例如 PROXY Protocol 未启用），回退到使用直接连接的 IP 地址 $remote_addr。
+    default $remote_addr;
+}
+
+# 定义处理 443 端口流量的主 stream server 块。
+server {
+    # 启用 SSL/TLS 预读功能。
+    # 这允许 Nginx 在不完全终结 TLS 的情况下，提前读取 TLS Client Hello 握手信息，
+    # 以便从中提取 SNI (Server Name Indication)，供我们的 Lua 脚本判断目标域名。
+    ssl_preread on;
+
+    # 监听 443 端口，并根据环境变量决定是否启用 PROXY Protocol。
+    # ${PROXY_PROTOCOL_PARAM} 将会被 'proxy_protocol' 或空字符串替换。
+    # 🚀 [极致延迟优化] 开启 fastopen=256 支持 TCP 快速打开 (TFO)，完美消灭 1 个 RTT 的网络连接等待时延！
+    listen 443 ${PROXY_PROTOCOL_PARAM} fastopen=256;
+
+    # ---- 日志记录部分 ----
+
+    # 1. 应用标准的 stream 访问日志。
+    #    这个日志会记录所有进入此 server 块的连接，无论成功或失败。
+    #    'stream_log' 格式在 nginx.conf.template 中定义，日志被定向到标准输出，
+    #    方便在 'fly logs' 或 'docker logs' 中查看。
+    access_log /dev/stdout stream_log;
+
+
+
+
+    #    b) 目标路径 '$reject_log_path'：一个通过 map 指令计算出的动态变量。
+    #       - 如果连接状态 $status 是 500 (被我们的 Lua 脚本判定为拒绝)，
+    #         $reject_log_path 的值会是具体的文件路径 (如 /dev/shm/rejected_ips.log)。
+    #       - 如果连接状态是任何其他值 (如 200)，$reject_log_path 的值会是 /dev/null。
+    #    最终效果：只有被拒绝的连接，其 IP 才会被记录到我们的专用日志文件中。
+    # 2. [修复] 应用条件日志，使用 if= 参数
+    #    只有当 $log_rejected_ip 变量为 "1" (即 $status=500) 时，
+    #    Nginx 才会将日志写入到这个静态指定的绝对路径中。
+    #    这种方式避免了因路径是变量而导致的 Nginx 路径拼接问题。
+    access_log /dev/shm/rejected_ips.log reject_log if=$log_rejected_ip;
+
+    # ---- 核心处理逻辑 ----
+
+    # 初始化一个变量，用于存储 Lua 脚本计算出的最终上游地址。
+    set $final_upstream "";
+
+    # 🚀 [极致可观测性：声明拦截原因变量，实现流式精确拦截记录]
+    set $block_reason "-";
+
+    # 在 SSL 预读阶段（preread phase）执行 Lua 脚本。
+    # 这是 stream 模块中能执行复杂逻辑的最早阶段。
+    # a) stream_handler.lua 将会检查客户端 IP 是否在白名单中。
+    # b) 如果不在，它会返回错误，导致连接的 $status 变为 500。
+    # c) 如果在，它会根据 SNI 决定最终的上游服务器地址，并赋值给 $final_upstream 变量。
+    preread_by_lua_file /app/nginx/lua/stream/stream_handler.lua;
+
+    # 将连接代理到由 Lua 脚本动态决定的上游服务器。
+    # 如果 $final_upstream 为空（例如 Lua 脚本出错或未设置），连接将会失败。
+    proxy_pass $final_upstream;
+}
+
+# 🚀 [精简端口：环回注入 PROXY Protocol 网关]
+# 本地环回监听 127.0.0.1:18443。
+# 所有通过公网 443 端口接入、SNI 匹配 AUTH_DOMAIN 的流量，在此均可安全无缝地被注入 PROXY Protocol
+# 头部并转发给 8443 管理后端。这在不暴露公网多端口的前提下完美实现了客户端真实 IP 的无损透传！
+server {
+    listen 127.0.0.1:18443;
+    proxy_protocol on;
+    proxy_pass 127.0.0.1:8443;
+}

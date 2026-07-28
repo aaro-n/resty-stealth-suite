@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  restytunnel:
+    build: .
+    container_name: restytunnel-proxy
+    restart: always
+    ports:
+      - "443:443"  # 标准 HTTPS 代理与双域名、HTTP/3 QUIC (UDP 443) 共用
+      - "443:443/udp"
+    environment:
+      # === 1. 代理基础核心配置 ===
+      - PROXY_DOMAIN=agent.yourdomain.com      # 您的主力正向代理域名 (直接解析到服务器公网 IP，不通过 CF 代理)
+      - PROXY_USERNAME=myuser                  # 正向代理认证账号 (同时也是白名单管理面板的登录账号)
+      - PROXY_PASSWORD=mypassword              # 正向代理认证密码 (同时也是白名单管理面板的登录密码)
+      - FALLBACK_BACKEND=https://cn.bing.com   # 探测失败/普通流量反代回落的终点 (可设置为您的 AList/Cloudreve 等自建网盘工具)
+
+      # === 2. 安全金盾 IP 白名单配置 ===
+      - ENABLE_IP_WHITELIST=true               # 生产环境强烈建议开启 IP 来源授权校验 (设为 true 激活)
+      - AUTH_DOMAIN=auth.yourdomain.com        # 您的第二白名单授权管理域名 (在 Cloudflare 开启 CDN 代理保护)
+      - AUTH_PATH_PREFIX=auth                  # 随机子路径前缀 (双重防刺探防线之一)
+      - SECRET_TOKEN=mysecrettoken123          # 安全网页随机密令 (双重防刺探防线之二)
+      - WHITELIST_IP_TTL_DAYS=7                # 白名单单次授权持续天数 (默认 7 天)
+      - WHITELIST_DB_PATH=/dev/shm/whitelist.db  # 🎯 白名单物理文件路径控制 (默认基于 RAM 内存的高速物理盘)
+      - REJECTED_LOG_PATH=/dev/shm/rejected_ips.log  # 🎯 探测拦截记录物理文件路径控制 (默认基于 RAM 内存盘)
+
+      # === 3. 高级调优开关 ===
+      - ENABLE_CF_AOP=false                    # Cloudflare 双向 mTLS 强校验开关 (建议配置好 CF Authenticated Origin Pulls 后开启)
+      - NGINX_PORT=443                         # 容器运行监听端口 (默认 443，Fly.io 部署建议变更为 10443)
+      - ENABLE_PROXY_PROTOCOL=false            # 🎯 开启 PROXY 协议接收支持 (如部署在 Fly.io 盲直通时设为 true)
+      - PROXY_FALLBACK_BACKEND=https://cn.bing.com  # 🎯 代理域名专属回落后端 (不设则默认继承 FALLBACK_BACKEND)
+      - AUTH_FALLBACK_BACKEND=https://cn.bing.com   # 🎯 验证域名专属回落后端 (不设则默认继承 FALLBACK_BACKEND)
+      - TZ=Asia/Shanghai                       # 🎯 默认时区设为北京时间，解决日志时序混乱
+      - TASK_CLEAN_WHITELIST_INTERVAL_SECONDS=3600 # 后台自动白名单过期扫描周期 (默认每 1 小时自动维护清理)
+      - TASK_CLEAN_LOG_RETAIN_LINES=30         # 被拒阻断日志流式精准截断最大行数 (物理抛弃旧拦截)
+      - ENABLE_VIEW_WHITELIST=true             # 安全可见性：是否允许在网页中查看白名单列表 (默认 true)
+      - ENABLE_VIEW_BLACKLIST=true             # 安全可见性：是否允许在网页中查看被拒拦截日志 (默认 true)
+    volumes:
+      # 持久化或手动装载的 15 年 Cloudflare 源站证书目录 (容器启动时全自动识别并加载)
+      - ./ssl:/etc/nginx/ssl
+    tmpfs:
+      - /dev/shm
+

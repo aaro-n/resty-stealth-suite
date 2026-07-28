@@ -1,0 +1,344 @@
+# File: nginx.conf.template
+# Description: RestyTunnel 终极防探测 Nginx 1.31 + OpenResty 核心配置文件模板
+# 采用原生 Nginx 1.31+ 盲隧道 (tunnel_pass) 与 Lua 鉴权完美闭环，安全保底防探测。
+
+user root;
+worker_processes auto;
+worker_cpu_affinity auto; # 🚀 [极致性能调优] 强行开启 CPU 亲和性绑定，消灭多核 CPU 调度及进程切换导致的 L1/L2 缓存抖动
+worker_rlimit_nofile 20480; # 🎯 [高并发优化] 提升 Nginx 最大允许打开的文件描述符限制，防止代理大流量并发时产生 "Too many open files" 报错
+error_log /usr/local/openresty/nginx/logs/error.log ${NGINX_LOG_LEVEL};
+pid /run/nginx.pid;
+
+events {
+    worker_connections 4096;
+    multi_accept on;
+}
+
+# 注入环境变量，使得 Lua 能够在运行时无缝读取用户的 fly.toml/Docker 配置
+env RT_USERS;
+env RT_SESSION_TTL_SECONDS;
+env RT_SESSION_TTL;
+env RT_TOTP_VALID_WINDOW_SECONDS;
+env RT_TOTP_VALID_WINDOW;
+env RT_PROXY_USERNAME;
+env RT_PROXY_PASSWORD;
+env RT_PROXY_DOMAIN;
+env RT_AUTH_DOMAIN;
+env RT_FALLBACK_BACKEND;
+env RT_AUTH_FALLBACK_BACKEND;
+env RT_ENABLE_IP_WHITELIST;
+env RT_DISABLE_REJECT_LOG;
+env RT_WHITELIST_IP_TTL_DAYS;
+env RT_WHITELIST_IP_TTL_SECONDS;
+env RT_ENABLE_VIEW_WHITELIST;
+env RT_ENABLE_VIEW_BLACKLIST;
+env RT_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS;
+env RT_TASK_CLEAN_LOG_RETAIN_LINES;
+env RT_WHITELIST_DB_PATH;
+env RT_REJECTED_LOG_PATH;
+env RT_ENABLE_CF_AOP;
+env RT_ENABLE_CUSTOM_MTLS;
+
+http {
+    # 配置 Lua 模块寻找路径，支持模块化 Lua 开发
+    lua_package_path "/app/nginx/lua/?.lua;/etc/nginx/lua/?.lua;;";
+
+    # 🚀 [极致性能与并发调优] 声明 10MB 强规格的共享内存白名单字典。
+    # 数据的读写完全由 C 语言在纯物理 RAM 中以高效 Hash 树结构维护，天然跨 Worker 线程安全共享，彻底规避文件 I/O 开销，读写性能提升至微秒级！
+    lua_shared_dict whitelist_dict 10m;
+
+    # [自动维护机制] 每个 Worker 进程启动时，通过 Worker 0 初始化后台白名单定时清理
+    init_worker_by_lua_block {
+        -- 🚀 [极致内存与时延调优] 优化 Lua 虚拟机垃圾回收 (GC) 策略。
+        -- 默认的 GC 步长过于保守，在大流量并发代理下会导致 Lua 内存虚高并在触发 GC 时产生毫秒级时延抖动（Jitter 指纹）。
+        -- 通过将 pause 设为 100% (即刻启动新周期)，并把 stepmul 设为 500% (大幅提速垃圾清理速度)，保证 Lua 内存始终紧凑，彻底消灭 GC 时延抖动！
+        collectgarbage("setpause", 100)
+        collectgarbage("setstepmul", 500)
+
+        require("scheduler").start()
+    }
+
+    # [安全加固] 配置 IP 速率限制区域，用于白名单面板防暴力破解
+    limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=${AUTH_RATE_LIMIT};
+
+    # 🎯 [安全与可观测性加固] 定义高级访问日志格式，在标准日志中追加打印 REAL_IP_HEADER、代理协议状态及真实访客公网 IP
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for" '
+                    'real_ip_resolved:[$realip_remote_addr] connection_proto:[$server_protocol]';
+
+    # 动态加载通用真实 IP 获取配置 (如果存在)
+    include /etc/nginx/conf.d/real_ip.conf;
+
+    # 🎯 [极致 I/O 调优] 启用内存级日志缓冲区。
+    # 代理在高吞吐（如加载海量推特、FB图片视频流）时，Nginx 每行日志都会触发一次物理磁盘写入，这会严重阻塞 Nginx 的 epoll 事件循环并占用高达 20% 的 CPU。
+    # 通过设置 32KB 内存缓冲区与 5 秒定时刷盘，网络数据传输时延将获得飞跃级降低，物理 IO 损耗直接归零！
+    access_log /usr/local/openresty/nginx/logs/access.log main buffer=32k flush=5s;
+
+    include       /usr/local/openresty/nginx/conf/mime.types;
+    default_type  application/octet-stream;
+
+    # 基础性能优化
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    
+    # 🎯 [极致性能调优] 优化长连接池，让浏览器最大化复用 TCP 连接，消灭频繁建立连接的握手时延
+    keepalive_timeout  360s;
+    keepalive_requests 100000; # 🚀 强力提升单次连接可承载的请求数上限（默认仅 100），极大适配推特/Reddit等超多碎片并发页面
+    
+    # 🎯 [云端大文件上传优化] 提升最大允许客户端上传的 Body 大小（默认仅 1M）。
+    # 完美支持通过代理或直连访问 AList、Cloudreve 等自建云盘进行 GB 级超大文件、高清视频的高速无阻碍上传！
+    client_max_body_size 0; # 🚀 设为 0 代表完全关闭大小限制，由回落后端应用自行控制
+    
+    # 🎯 [极致速度调优] 瞬间释放超时的废弃网络连接，彻底解决客户端（如移动端基站切换）断连残留导致的 Socket 句柄虚占
+    reset_timedout_connection on;
+
+    # 🎯 [极致时延调优] 缩减 SSL 缓冲区包长（默认高达 16k），使得代理数据（如推特小碎片图）无需等待攒够 16k 块即可立刻被客户端解密渲染，大幅提升首屏加载的响应时延（TTFB）
+    ssl_buffer_size 4k;
+    
+    types_hash_max_size 2048;
+
+    # DNS 解析器（原生正向代理必须）
+    resolver ${DNS_RESOLVER} valid=300s;
+    resolver_timeout 2s; # 🚀 缩短 DNS 探测超时，防止上游 DNS 阻塞导致代理卡顿
+
+    # ========================================================
+    #  443 端口服务：主力 HTTPS 代理与伪装网站共存 (绑定为 default_server)
+    # ========================================================
+    server {
+        server_name ${PROXY_DOMAIN};
+        
+        # 1. TCP 监听，支持常规 HTTPS 并启用 HTTP/2 降级通道 (可开启 proxy_protocol 接收前置代理流量)
+        # 🚀 [极致延迟优化] 开启 fastopen=256 支持 TCP 快速打开 (TFO)。
+        # 允许客户端在发起 TCP 三次握手的第一步 (SYN 包) 中就直接捎带 TLS Client Hello 请求数据包，完美消灭 1 个 RTT 的网络连接等待时延！
+        listen ${NGINX_PORT} default_server ssl ${PROXY_PROTOCOL_LISTEN_OPTION} fastopen=256;
+
+        # 🎯 [安全与真实 IP 加固] 指定此 server 针对代理通道使用的真实 IP 获取方式 (Proxy Protocol)
+        ${PROXY_REAL_IP_HEADER_LINE}
+
+        # 🎯 [域名隔离动态回落加固] 为此虚拟主机设置专属的降维回落后端地址与 Host 头部 (自适应优先级机制)
+        set $fallback_backend "${PROXY_FALLBACK_BACKEND}";
+        set $fallback_host "${PROXY_FALLBACK_HOST}";
+
+        # 🎯 [安全加固] 终极无懈可击的 Host 域名防护：
+        # 只有在以下两种合法场景下才允许请求继续：
+        # 1. 客户端发起的是 CONNECT 代理通道请求（此时 Host 是代理目标网站，不匹配 PROXY_DOMAIN）
+        # 2. 访问者是通过您的正向域名正常访问伪装网站（此时 Host 严格等于 PROXY_DOMAIN）
+        # 其余一切非标请求（如直接用 IP 扫、恶意解析域名扫描等），一律 400 原地物理彻底斩断，绝不返回任何回落网页！
+        set $is_unauthorized_host "Y";
+        if ($request_method = "CONNECT") {
+            set $is_unauthorized_host "";
+        }
+        if ($host = "${PROXY_DOMAIN}") {
+            set $is_unauthorized_host "";
+        }
+        if ($is_unauthorized_host = "Y") {
+            return 400;
+        }
+        
+        # 🎯 [关键修复：解决 Chrome/Edge/Safari 浏览器直连代理报错]
+        # 浏览器在连接 HTTPS 代理时，如果协商了 HTTP/2 (H2) 或 HTTP/3 (H3)，会尝试发送 H2/H3 CONNECT 帧。
+        # 由于 Nginx 1.31+ 官方原生的 C 语言 `tunnel_pass` 盲转暗道只支持 HTTP/1.1 标准 CONNECT 协议，
+        # 如果协商成 H2/H3，Nginx 无法解析，会导致浏览器直接报 ERR_TUNNEL_CONNECTION_FAILED 错误，并在日志中产生 400 "-" 报错。
+        # 修复办法：在此虚拟主机中强制关闭 HTTP/2 和 HTTP/3，迫使浏览器与 Nginx 协商并采用 100% 兼容的 HTTP/1.1 TLS 连接。
+        http2 off;
+        http3 off;
+
+        # 🎯 [防探测加固] 拦截明文 HTTP 访问 HTTPS 端口产生的 497 错误，301 智能重定向到 HTTPS
+        error_page 497 =301 https://$host$request_uri;
+
+        # ==========================================
+        # 模块化配置文件导入 (分工明确，专注单一功能)
+        # ==========================================
+        include /etc/nginx/conf.d/ssl.conf;
+        
+        # 统一入口：安全过滤与代理检测分流 (由 gateway.conf 定义 location /)
+        include /etc/nginx/conf.d/gateway.conf;
+
+        include /etc/nginx/conf.d/backend.conf;
+
+        # [核心转发处理器] 仅供内部 Lua 逻辑鉴权通过后跳转使用
+        location @native_tunnel {
+            # 显式开启放行，解决部分环境下的 403 限制
+            allow all;
+
+            # 🎯 激活 Nginx 1.31+ 官方原生黑科技！
+            tunnel_pass;
+            tunnel_buffer_size 64k;
+            tunnel_connect_timeout 15s;
+            tunnel_socket_keepalive on;
+        }
+    }
+
+    # ========================================================
+    # 🔒 443 端口服务：IP 白名单写入与自助管理服务 (Dual Domain)
+    # ========================================================
+    server {
+        server_name ${AUTH_DOMAIN};
+        
+        # 1. TCP 监听与 HTTP/2 支持
+        # 🚀 [极致延迟优化] 开启 fastopen=256 以提速白名单网页管理后台的握手，消灭重复建立连接的等待时延
+        # ⚠️ 注意：由于 Nginx 规定同一端口只能在其中一个 listen 指令中声明 default_server 或附加控制级监听选项，故在此处保持基础 ssl 监听选项
+        listen ${NGINX_PORT} ssl ${PROXY_PROTOCOL_LISTEN_OPTION};
+        http2 on;
+
+        # 🎯 [安全与真实 IP 加固] 页面始终通过 Cloudflare CDN 代理，因此必须使用 HTTP 标头（如 CF-Connecting-IP）解析真实用户 IP
+        real_ip_header ${REAL_IP_HEADER};
+        real_ip_recursive on;
+
+        # 🎯 [域名隔离动态回落加固] 为此验证虚拟主机设置专属的降维回落后端地址与 Host 头部 (自适应优先级机制)
+        set $fallback_backend "${AUTH_FALLBACK_BACKEND}";
+        set $fallback_host "${AUTH_FALLBACK_HOST}";
+
+        # 🎯 [安全加固] 极速校验主机头：防止恶意直接 IP 刺探或未绑定域名访问此白名单管理服务 (完美兜底)
+        if ($host !~* ^(${AUTH_DOMAIN})$) {
+            return 400;
+        }
+
+        # 2. UDP 监听与 HTTP/3 (QUIC) 支持
+        listen ${NGINX_PORT} quic;
+        http3 on;
+
+        # 3. 核心通告：告诉浏览器支持 HTTP/3
+        add_header Alt-Svc 'h3=":${NGINX_PORT}"; ma=86400';
+
+        # 🎯 [防探测加固] 拦截明文 HTTP 访问 HTTPS 端口产生的 497 错误，301 智能重定向到 HTTPS
+        error_page 497 =301 https://$host$request_uri;
+
+        # 4. 复用 SSL 加密配置和底层伪装后端连接
+        include /etc/nginx/conf.d/ssl.conf;
+        include /etc/nginx/conf.d/backend.conf;
+
+        # 5. 动态 mTLS 配置注入点 (由 bootstrap.sh 脚本根据环境变量渲染)
+        ${MTLS_INCLUDE_LINE}
+
+        # 🎯 [高级 mTLS 智能防护层] 如果开启了 mTLS 校验且验证失败，不返回 400 报错（防止指纹暴露），而是直接静默丢给伪装后端
+        # 注意：这里在 Lua 阶段进行审计并优雅拦截
+        rewrite_by_lua_block {
+            local enable_cf_aop = (os.getenv("RT_ENABLE_CF_AOP") or os.getenv("ENABLE_CF_AOP")) == "true"
+            local enable_custom_mtls = (os.getenv("RT_ENABLE_CUSTOM_MTLS") or os.getenv("ENABLE_CUSTOM_MTLS")) == "true"
+            
+            if (enable_cf_aop or enable_custom_mtls) then
+                local client_verify = ngx.var.ssl_client_verify
+                if client_verify ~= "SUCCESS" then
+                    ngx.log(ngx.WARN, "🔴 [BLOCK] [mTLS_FAILED] -> Client IP: ", ngx.var.remote_addr, " 试图访问授权页面，但未出示合法的客户端证书（状态: ", client_verify, "）。动作：静默反代伪装后端 (Bing)")
+                    ngx.exec("@backend")
+                    return
+                end
+            end
+        }
+
+        # 6. 自助添加 IP 到白名单管理页面 (安全端点 URL)
+        # 访问 URL: https://AUTH_DOMAIN/AUTH_PATH_PREFIX/SECRET_TOKEN
+        location = /${AUTH_PATH_PREFIX}/${SECRET_TOKEN} {
+            # 应用速率限制，防止暴力破解
+            limit_req zone=auth_limit burst=5 nodelay;
+
+            content_by_lua_file /etc/nginx/lua/auth_handler.lua;
+        }
+
+        # 🎯 [安全与防劫持加固] 极度安全的双态 Service Worker 卸载与防劫持引擎
+        # 您的真实业务在根目录下注册并启用了 Service Worker (sw.js / service-worker.js)。
+        # 由于其作用域是整个域名，它会把授权域名下的控制台路径也强行用 SPA 壳覆盖劫持（产生 Dead-Lock 锁死）。
+        # 拦截并返回一个自适应、免崩溃、能自驱注销并重载页面的极致健壮 Service Worker 脚本，物理切断劫持！
+        # 🚀 加密加固：注入强效零缓存头部，强制 Cloudflare CDN 和浏览器 100% 穿透读取，绝不使用陈旧缓存
+        # 🛡️ [防扫描防指纹漏洞加固] 采用 Lua 动态审计拦截：只有当前 IP 已加入白名单，或者客户端携带了合法的免密 Cookie 凭证时，
+        # 才返回自驱动注销的 Service Worker 脚本以打破死锁。其余一切陌生扫描 IP 直接静默反代至伪装后端，100% 隐藏防扫描特征！
+        location ~* /(sw\.js|service-worker\.js) {
+            access_by_lua_block {
+                local whitelist = require("whitelist")
+                local client_ip = ngx.var.final_real_client_ip or ngx.var.remote_addr or "unknown"
+                
+                local is_allowed = whitelist.check(client_ip)
+                if not is_allowed then
+                    -- 检查是否携带合法的免密 Cookie 锁
+                    local headers = ngx.req.get_headers()
+                    local cookie_str = headers["Cookie"]
+                    if type(cookie_str) == "table" then
+                        cookie_str = table.concat(cookie_str, "; ")
+                    else
+                        cookie_str = cookie_str or ""
+                    end
+                    
+                    if cookie_str ~= "" then
+                        local cookie_user = string.match(cookie_str, "gkp_user=([%w%.%_%-]+)")
+                        local cookie_pass = string.match(cookie_str, "gkp_session=([%w]+)")
+                        if cookie_user and cookie_pass then
+                            local config = require("config")
+                            local users_db = {}
+                            local raw_users = config.raw_users
+                            if raw_users and raw_users ~= "" then
+                                for user_entry in string.gmatch(raw_users, "([^,]+)") do
+                                    user_entry = string.gsub(user_entry, "^%s*(.-)%s*$", "%1")
+                                    local username, val1, val2 = string.match(user_entry, "^([^:]+):([^:]+):?(.*)$")
+                                    if username and val1 then
+                                        users_db[username] = {
+                                            credential = val1,
+                                            totp_secret = (val2 ~= "" and val2 or nil)
+                                        }
+                                    end
+                                end
+                            end
+                            local user_record = users_db[cookie_user]
+                            local target_secret = user_record and (user_record.totp_secret or user_record.credential)
+                            if target_secret and cookie_pass == target_secret then
+                                is_allowed = true
+                            end
+                        end
+                    end
+                end
+
+                if not is_allowed then
+                    -- 陌生 IP 访问，直接静默投递给后端伪装，100% 隐藏一切防扫描特征！
+                    ngx.exec("@backend")
+                    return
+                end
+            }
+
+            default_type application/javascript;
+            add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0";
+            add_header Pragma "no-cache";
+            expires off;
+            return 200 "if (typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope) { self.addEventListener('install', function(e) { self.skipWaiting(); }); self.addEventListener('activate', function(e) { e.waitUntil(self.registration.unregister().then(function() { return self.clients.matchAll(); }).then(function(clients) { clients.forEach(function(client) { try { client.navigate(client.url); } catch(err) {} }); })); }); } else { if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(function(regs) { for (let reg of regs) { var scriptURL = (reg.active || reg.installing || reg.waiting || {}).scriptURL || ''; if (scriptURL && !scriptURL.includes('gkp-sw.js')) { reg.unregister(); } } }); } }";
+        }
+
+        # 🚀 [新增控制台 PWA 独立集成模块]
+        # 动态生成控制台专属 PWA Manifest 配置文件，并实施 Lua 动态审计拦截以完美抹除探测指纹特征
+        location = /gkp-manifest.json {
+            access_by_lua_block {
+                local whitelist = require("whitelist")
+                local client_ip = ngx.var.final_real_client_ip or ngx.var.remote_addr or "unknown"
+                if not whitelist.check(client_ip) then
+                    ngx.exec("@backend")
+                    return
+                end
+            }
+            default_type application/json;
+            add_header Cache-Control "no-cache, no-store, must-revalidate";
+            return 200 '{\n  "name": "安全代理 IP 自助管理控制台",\n  "short_name": "代理控制台",\n  "description": "RestyTunnel 安全代理 IP 授权与自助管理端",\n  "start_url": "/${AUTH_PATH_PREFIX}/${SECRET_TOKEN}",\n  "display": "standalone",\n  "background_color": "#f4f7f6",\n  "theme_color": "#007bff",\n  "icons": [\n    {\n      "src": "data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>\uD83D\uDEE1\uFE0F</text></svg>",\n      "sizes": "512x512",\n      "type": "image/svg+xml"\n    }\n  ]\n}';
+        }
+
+        # 动态生成控制台专属 PWA Service Worker，满足安装标准的同时，绝不进行本地文件缓存，杜绝任何页面更新滞后 Bug
+        location = /gkp-sw.js {
+            access_by_lua_block {
+                local whitelist = require("whitelist")
+                local client_ip = ngx.var.final_real_client_ip or ngx.var.remote_addr or "unknown"
+                if not whitelist.check(client_ip) then
+                    ngx.exec("@backend")
+                    return
+                end
+            }
+            default_type application/javascript;
+            add_header Cache-Control "no-cache, no-store, must-revalidate";
+            return 200 "self.addEventListener('install', function(e) { self.skipWaiting(); }); self.addEventListener('activate', function(e) { e.waitUntil(self.clients.claim()); }); self.addEventListener('fetch', function(e) { e.respondWith(fetch(e.request)); });";
+        }
+
+        # 8. 其余请求一律扔给后端伪装网站 (由 CF 安全代理后直通)
+        location / {
+            content_by_lua_block {
+                ngx.exec("@backend")
+            }
+        }
+    }
+}

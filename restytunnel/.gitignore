@@ -1,0 +1,24 @@
+# RestyTunnel Git 忽略规则
+
+# 忽略本地临时证书缓存
+ssl/*
+!ssl/README.md
+
+# 忽略本地自签名生成的测试密钥
+acme_cache/
+
+# 🛑 核心忽略：不要推送 large/cerberus 依赖组件
+other/
+
+# 忽略环境变量配置文件
+.env
+.env.local
+.env.development
+.env.production
+
+# 忽略系统与 IDE 临时文件
+.DS_Store
+.idea/
+.vscode/
+*.tmp
+*.log

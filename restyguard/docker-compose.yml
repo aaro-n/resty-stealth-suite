@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  restyguard:
+    build: .
+    container_name: restyguard-gateway
+    restart: always
+    ports:
+      - "443:443" # 🚀 公网唯一暴露：极速 443 单物理端口入口
+    environment:
+      # === 1. 核心认证与路径加固 (统一前缀 RG_) ===
+      - RG_SECRET_TOKEN=my-secure-token-12345        # 🔑 白名单管理面板的登录安全密令
+      - RG_AUTH_PATH_PREFIX=auth                     # 🚪 二级管理隐藏路径前缀 (防主动扫后台)
+      - RG_AUTH_DOMAIN=auth.yourdomain.com           # 🌐 管理面板专用控制域名 (建议在 CF 开启 CDN)
+      - RG_ENABLE_IP_WHITELIST=true                  # 🛡️ 启用白名单网关 (设为 false 退化为纯粹极速 SNI 转发代理)
+      - RG_FALLBACK_BACKEND=https://cn.bing.com      # 🎭 降维伪装回落后端 (未命中合规授权路径时的高保真反代假首页)
+
+      # === 2. 路由控制 (Key-Value 文件与环境变量自适应合并) ===
+      # - RG_UPSTREAM_RULES_FILE=/etc/nginx/rules/upstream_rules.conf # 静态配置文件自定义位置 (不设采用默认)
+      - RG_STREAM_UPSTREAM_RULES=|                   # 🚀 极其护眼的全新多行等号环境变量路由规则表
+          - "git.yourdomain.com=192.168.1.10:443"
+          - "api.yourdomain.com=api-server:8443"
+          - "*=translate.googleapis.com:443"
+
+      # === 3. 白名单生命周期 & 后台维护 ===
+      - RG_WHITELIST_IP_TTL_SECONDS=86400            # 白名单单次授权持续有效期秒数 (默认 1 天)
+      - RG_TASK_CLEAN_LOG_INTERVAL_SECONDS=600        # 黑名单拦截日志后台定时截断频率 (秒)
+      - RG_TASK_CLEAN_LOG_RETAIN_LINES=10            # 拦截历史日志流式精准留存的最大物理行数
+      - RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS=86400 # 自动清理过期白名单数据库的时间间隔频率 (秒)
+
+      # === 4. 系统高级性能与时区调优 ===
+      - RG_TZ=Asia/Shanghai                          # 🗺️ 默认时区配置，解决日志时序混乱
+      - RG_NGINX_PROXY_PROTOCOL=off                  # 是否启用主 443 Stream 入口 PROXY 协议接收支持 (默认 off)
+      - RG_NGINX_CDN_IP_HEADERS=CF-Connecting-IP:cf,True-Client-IP:cf # 边缘 CDN 真实 IP 获取优先级链
+      - RG_SHOW_REJECTED_LOG=true                    # 允许管理员在管理控制台卡片中直接阅读最新拦截阻断实况
+      - RG_SHOW_WHITELIST_DB=true                     # 允许管理员在管理控制台卡片中阅读活跃白名单 IP 列表
+
+    volumes:
+      # 手动装载您服务器公网合规的 SSL 证书（cert.pem / key.pem），不挂载系统将自动加载高保真自签名保底证书
+      - ./certs:/etc/nginx/certs
+      # 本地持久化 / 协同管理您的域名静态路由配置文件
+      - ./upstream_rules.conf:/etc/nginx/rules/upstream_rules.conf
+    tmpfs:
+      # 🚀 [极致并发与硬件保护调优] 将频繁增删的日志与白名单数据挂载至 RAM 内存物理盘上运行，彻底消灭磁盘 I/O 磨损
+      - /dev/shm
