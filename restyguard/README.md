@@ -26,15 +26,14 @@
                        │                                │                       │
                        │                                ▼                       │
                        │                         127.0.0.1:8443                 │
-                       │                         (HTTPS 环回管理 & IP 诊断服务)  │
-                       │                            ├─► /auth/SECRET_TOKEN (授权)│
-                       │                            └─► /ip (安全 TLS IP 诊断)   │
+                       │                         (HTTPS 环回管理服务)           │
+                       │                            └─► /auth/SECRET_TOKEN (授权)│
                        └────────────────────────────────────────────────────────┘
 ```
 
 ### 唯一外部物理端口：443
 
-在公网上，本容器 **100% 仅暴露、仅监听 443 一个物理端口**。原本危险的 `8443` 管理端口和明文裸奔的 `8080` 调试端口完全被隐藏在容器内部的本地环回接口上，外界扫描器完全不可见。
+在公网上，本容器 **100% 仅暴露、仅监听 443 一个物理端口**。原本危险的 `8443` 管理端口完全被隐藏在容器内部的本地环回接口上，外界扫描器完全不可见。
 
 当外部用户访问 `RG_AUTH_DOMAIN`（管理域名，如 `auth.yourdomain.com`）时，四层流网关通过 SNI 预读自动将其识别并放行，绕过白名单直接接力给内部的 `127.0.0.1:8443` 控制台，在保护业务安全的同时，实现了完美的单端口全隐形安全。
 
@@ -160,18 +159,6 @@ https://auth.yourdomain.com/auth/my-secure-token-12345
 javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFIX";var token="YOUR_SECRET_TOKEN";var username="YOUR_PROXY_USERNAME";var baseUrl="https://"+domain+"/"+prefix+"/"+token;if(window.location.href.indexOf(domain)!==-1){if(document.cookie.indexOf("gkp_active=1")!==-1){window.location.reload();}else{var code=prompt("🔑 [RestyGuard 双重验证]\n\n您的 30 天免密已过期。\n请输入您手机 App (Google Authenticator) 上的 6 位动态验证码：");if(code&&/^\d{6}$/.test(code)){window.location.href=baseUrl+"?u="+username+"&code="+code;}}}else{var code=prompt("🔑 [RestyGuard 智能免密通道]\n\n若当前已处于 30 天免密期内，可直接不输入并点“确定/回车”直入后台。\n\n新设备请直接输入您手机上的 6 位动态验证码：");if(code===""){window.location.href=baseUrl;}else if(code&&/^\d{6}$/.test(code)){window.location.href=baseUrl+"?u="+username+"&code="+code;}}})();
 ```
 *(注：使用时请将上述的配置替换为您自己的真实控制台域名即可永久畅行！)*
-
----
-
-## 调试与安全 IP 诊断
-
-由于 8080 端口已被彻底废除并公网全隐形，IP 诊断服务已安全收拢。在已加白或 CF Bypass 后，只需访问：
-
-```bash
-curl https://auth.yourdomain.com/ip
-```
-
-即可得到高安全的客户端真实 IP 精准识别及 CDN 标头调试数据。
 
 ---
 
