@@ -62,7 +62,7 @@ services:
     volumes:
       # 将您的 SSL 证书挂载到容器中
       # 如果不挂载，容器将自动生成自签名证书
-      - ./certs:/etc/nginx/certs:ro
+      - ./certs:/etc/nginx/ssl
       # 如果您使用静态文件来管理路由规则
       - ./upstream_rules.conf:/etc/nginx/rules/upstream_rules.conf:ro
     environment:
@@ -115,7 +115,7 @@ docker run -d --name my-restyguard \
   -e RG_SECRET_TOKEN="your-strong-secret-here" \
   -e RG_AUTH_DOMAIN="auth.yourdomain.com" \
   -e RG_STREAM_UPSTREAM_RULES="*:translate.googleapis.com:443" \
-  -v "$(pwd)/certs":/etc/nginx/certs:ro \
+  -v "$(pwd)/certs":/etc/nginx/ssl \
   -p 443:443 \
   restyguard
 ```
@@ -139,6 +139,15 @@ docker run -d --name my-restyguard \
 | `RG_STREAM_UPSTREAM_MAP` | `*:translate.googleapis.com:443` | **旧版兼容冒号路由表**，逗号分隔，优先级低于 `RG_STREAM_UPSTREAM_RULES`。 |
 | `RG_NGINX_DNS_RESOLUTION_SECONDS` | `600` | DNS 解析结果在内存中的缓存时间（秒） |
 | `RG_NGINX_PROXY_PROTOCOL` | `off` | 是否在 443 stream 入口开启 PROXY 协议接收支持。部署在 Fly.io 等前置有代理的负载均衡设备时设为 `on`。 |
+
+### TLS 与双向 mTLS 证书模块
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `RG_SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | **【高级】服务端 SSL 证书公钥文件路径**，支持指向容器内任何自定义位置。 |
+| `RG_SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | **【高级】服务端 SSL 证书私钥文件路径**，支持指向容器内任何自定义位置。 |
+| `RG_CLIENT_CA_CERT_PATH` | `/etc/nginx/ssl/ca.pem` | **【高级】双向 mTLS 校验客户端证书 CA 根证书路径**。 |
+| `RG_ENABLE_CUSTOM_MTLS` | `false` | **自定义 mTLS 双向认证开关**。设为 `true` 将强制对 `RG_AUTH_DOMAIN` 白名单管理域名启用双向客户端证书校验，无合规证书直接硬拦截阻断（返回 400 错误）。 |
 
 ### 自适应多用户与 TOTP 验证模块 (stealth)
 

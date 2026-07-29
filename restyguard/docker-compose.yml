@@ -37,7 +37,7 @@ services:
 
     volumes:
       # 手动装载您服务器公网合规的 SSL 证书（cert.pem / key.pem），不挂载系统将自动加载高保真自签名保底证书
-      - ./certs:/etc/nginx/certs
+      - ./certs:/etc/nginx/ssl
       # 本地持久化 / 协同管理您的域名静态路由配置文件
       - ./upstream_rules.conf:/etc/nginx/rules/upstream_rules.conf
     tmpfs:

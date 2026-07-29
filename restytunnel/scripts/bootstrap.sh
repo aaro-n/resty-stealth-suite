@@ -107,12 +107,8 @@ set_defaults() {
     export RT_ENABLE_CUSTOM_MTLS="${RT_ENABLE_CUSTOM_MTLS:-${ENABLE_CUSTOM_MTLS:-false}}"
     export ENABLE_CUSTOM_MTLS="$RT_ENABLE_CUSTOM_MTLS"
 
-    export RT_CLIENT_CA_CERT_PATH="${RT_CLIENT_CA_CERT_PATH:-${CLIENT_CA_CERT_PATH:-/etc/nginx/certs/my_ca.pem}}"
+    export RT_CLIENT_CA_CERT_PATH="${RT_CLIENT_CA_CERT_PATH:-${CLIENT_CA_CERT_PATH:-/etc/nginx/ssl/ca.pem}}"
     export CLIENT_CA_CERT_PATH="$RT_CLIENT_CA_CERT_PATH"
-
-    # Cloudflare Authenticated Origin Pulls (mTLS) 动态校验开关
-    export RT_ENABLE_CF_AOP="${RT_ENABLE_CF_AOP:-${ENABLE_CF_AOP:-false}}"
-    export ENABLE_CF_AOP="$RT_ENABLE_CF_AOP"
 
     # 日志级别、速率限制与日志开关
     export RT_NGINX_LOG_LEVEL="${RT_NGINX_LOG_LEVEL:-${NGINX_LOG_LEVEL:-notice}}"
@@ -148,6 +144,12 @@ set_defaults() {
     export RT_SSL_KEY_BASE64="${RT_SSL_KEY_BASE64:-${SSL_KEY_BASE64}}"
     export SSL_KEY_BASE64="$RT_SSL_KEY_BASE64"
     
+    # 🎯 [证书配置统一设计] 支持自定义路径及文件名，并提供默认值
+    export RT_SSL_CERT_PATH="${RT_SSL_CERT_PATH:-${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}}"
+    export SSL_CERT_PATH="$RT_SSL_CERT_PATH"
+    export RT_SSL_KEY_PATH="${RT_SSL_KEY_PATH:-${SSL_KEY_PATH:-/etc/nginx/ssl/key.pem}}"
+    export SSL_KEY_PATH="$RT_SSL_KEY_PATH"
+
     echo "   - 默认环境变量设置成功。"
 }
 
@@ -197,12 +199,13 @@ print_env_summary() {
     echo "   - 防爆速率限制 [RT_AUTH_RATE_LIMIT]:   ${RT_AUTH_RATE_LIMIT}"
     echo "   - 禁用拒绝日志 [RT_DISABLE_REJECT_LOG]: ${RT_DISABLE_REJECT_LOG}"
     fi
+    echo "   - HTTPS证书路径 [RT_SSL_CERT_PATH]: ${RT_SSL_CERT_PATH}"
+    echo "   - HTTPS密钥路径 [RT_SSL_KEY_PATH]: ${RT_SSL_KEY_PATH}"
     echo "   - 真实IP来源头 [RT_REAL_IP_HEADER]:    ${RT_REAL_IP_HEADER}"
     echo "   - 白名单物理路径 [RT_WHITELIST_DB_PATH]: ${RT_WHITELIST_DB_PATH}"
     echo "   - 黑名单物理路径 [RT_REJECTED_LOG_PATH]: ${RT_REJECTED_LOG_PATH}"
     echo "   - 启用 PROXY 协议 [RT_ENABLE_PROXY_PROTOCOL]: ${RT_ENABLE_PROXY_PROTOCOL}"
     echo "   - 信任代理地址 [RT_REAL_IP_FROM]:      ${RT_REAL_IP_FROM:-[默认信任CF]}"
-    echo "   - 开启CF AOP [RT_ENABLE_CF_AOP]:       ${RT_ENABLE_CF_AOP}"
     echo "   - 开启自定义mTLS [RT_ENABLE_CUSTOM_MTLS]: ${RT_ENABLE_CUSTOM_MTLS}"
     if [ "$RT_ENABLE_CUSTOM_MTLS" = "true" ]; then
     echo "   - 自定义CA路径 [RT_CLIENT_CA_CERT_PATH]: ${RT_CLIENT_CA_CERT_PATH}"
@@ -250,10 +253,13 @@ setup_configurations() {
     echo "=> [3/4] 正在检查证书与生成动态配置..."
     
     # --- 3a. SSL 证书自签名保底 ---
-    CERT_DIR="/etc/nginx/ssl"
-    KEY_PATH="${CERT_DIR}/privkey.pem"
-    CERT_PATH="${CERT_DIR}/fullchain.pem"
-    mkdir -p "$CERT_DIR"
+    KEY_PATH="${RT_SSL_KEY_PATH}"
+    CERT_PATH="${RT_SSL_CERT_PATH}"
+    
+    local cert_dir_parent=$(dirname "$CERT_PATH")
+    local key_dir_parent=$(dirname "$KEY_PATH")
+    mkdir -p "$cert_dir_parent" "$key_dir_parent"
+
     if [ -n "$SSL_CERT_BASE64" ] && [ -n "$SSL_KEY_BASE64" ]; then
         echo "   - [证书模块] 检测到 Base64 证书，正在解码..."
         echo "$SSL_CERT_BASE64" | base64 -d > "$CERT_PATH" 2>/dev/null || true
@@ -307,16 +313,13 @@ setup_configurations() {
     if [ "$ENABLE_CUSTOM_MTLS" = "true" ]; then
         if [ -f "$CLIENT_CA_CERT_PATH" ]; then
             local custom_mtls_conf="/etc/nginx/conf.d/custom-mtls.conf"
-            echo "ssl_verify_client optional;" > "$custom_mtls_conf"
+            echo "ssl_verify_client on;" > "$custom_mtls_conf"
             echo "ssl_client_certificate $CLIENT_CA_CERT_PATH;" >> "$custom_mtls_conf"
             export MTLS_INCLUDE_LINE="include /etc/nginx/conf.d/custom-mtls.conf;"
-            echo "   - [mTLS模块] 已启用：用户自定义 mTLS (CA: $CLIENT_CA_CERT_PATH) [智能静默模式]"
+            echo "   - [mTLS模块] 已启用：用户自定义 mTLS (CA: $CLIENT_CA_CERT_PATH) [强制校验模式]"
         else
             echo "   - [mTLS模块警告] ENABLE_CUSTOM_MTLS=true 但未找到 CA 证书于 $CLIENT_CA_CERT_PATH"
         fi
-    elif [ "$ENABLE_CF_AOP" = "true" ]; then
-        export MTLS_INCLUDE_LINE="include /etc/nginx/conf.d/cloudflare-aop.conf;"
-        echo "   - [mTLS模块] 已启用：Cloudflare AOP (mTLS) [智能静默模式]"
     else
         echo "   - [mTLS模块] mTLS 双向认证已禁用。"
     fi
@@ -342,7 +345,7 @@ generate_nginx_config() {
     for f in "$CONF_D_SRC"/*; do
         if [ -f "$f" ]; then
             fname=$(basename "$f")
-            envsubst '${PROXY_DOMAIN} ${AUTH_DOMAIN} ${SECRET_TOKEN} ${NGINX_PORT} ${FALLBACK_BACKEND} ${FALLBACK_HOST} ${PROXY_FALLBACK_BACKEND} ${PROXY_FALLBACK_HOST} ${AUTH_FALLBACK_BACKEND} ${AUTH_FALLBACK_HOST}' < "$f" > "/etc/nginx/conf.d/$fname"
+            envsubst '${PROXY_DOMAIN} ${AUTH_DOMAIN} ${SECRET_TOKEN} ${NGINX_PORT} ${FALLBACK_BACKEND} ${FALLBACK_HOST} ${PROXY_FALLBACK_BACKEND} ${PROXY_FALLBACK_HOST} ${AUTH_FALLBACK_BACKEND} ${AUTH_FALLBACK_HOST} ${RT_SSL_CERT_PATH} ${RT_SSL_KEY_PATH}' < "$f" > "/etc/nginx/conf.d/$fname"
         fi
     done
 

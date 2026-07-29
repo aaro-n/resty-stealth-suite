@@ -57,6 +57,15 @@ set_defaults() {
     export RG_TZ="${RG_TZ:-Asia/Shanghai}" # 🚀 [时区模块调优] 允许用户自定义时区，并保底默认时区设为北京时间（Asia/Shanghai）
     export RG_FALLBACK_BACKEND="${RG_FALLBACK_BACKEND:-https://cn.bing.com}" # 🚀 [回落防刺探调优] 支持未命中管理子路径时，高保真反代到伪装后端
 
+    # 🎯 [证书配置统一设计] 支持自定义路径及文件名，并提供默认值
+    export RG_SSL_CERT_PATH="${RG_SSL_CERT_PATH:-${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}}"
+    export RG_SSL_KEY_PATH="${RG_SSL_KEY_PATH:-${SSL_KEY_PATH:-/etc/nginx/ssl/key.pem}}"
+    export RG_CLIENT_CA_CERT_PATH="${RG_CLIENT_CA_CERT_PATH:-${CLIENT_CA_CERT_PATH:-/etc/nginx/ssl/ca.pem}}"
+    export RG_ENABLE_CUSTOM_MTLS="${RG_ENABLE_CUSTOM_MTLS:-false}"
+    if [ "$RG_ENABLE_CUSTOM_MTLS" = "true" ]; then
+        export RG_NGINX_TLS_MODE="mtls"
+    fi
+
     echo "   - 默认环境变量设置成功。"
 }
 
@@ -137,6 +146,12 @@ print_env_summary() {
     echo "   - 边缘 CDN IP 头优先级 [RG_NGINX_CDN_IP_HEADERS]: ${RG_NGINX_CDN_IP_HEADERS}"
     echo "   - 开启拒绝日志查看 [RG_SHOW_REJECTED_LOG]: ${RG_SHOW_REJECTED_LOG} (URL 映射为 /${RG_NGINX_REJECT_LOG_FILENAME})"
     echo "   - 开启白名单查看 [RG_SHOW_WHITELIST_DB]: ${RG_SHOW_WHITELIST_DB} (URL 映射为 /${RG_WHITELIST_DB_FILENAME})"
+    echo "   - HTTPS证书路径 [RG_SSL_CERT_PATH]: ${RG_SSL_CERT_PATH}"
+    echo "   - HTTPS密钥路径 [RG_SSL_KEY_PATH]: ${RG_SSL_KEY_PATH}"
+    echo "   - 开启自定义mTLS [RG_ENABLE_CUSTOM_MTLS]: ${RG_ENABLE_CUSTOM_MTLS}"
+    if [ "$RG_NGINX_TLS_MODE" = "mtls" ]; then
+        echo "   - 自定义CA路径 [RG_CLIENT_CA_CERT_PATH]: ${RG_CLIENT_CA_CERT_PATH}"
+    fi
     echo "   - 日志清理周期 [RG_TASK_CLEAN_LOG_INTERVAL_SECONDS]: ${RG_TASK_CLEAN_LOG_INTERVAL_SECONDS}s (保留最新 ${RG_TASK_CLEAN_LOG_RETAIN_LINES} 行)"
     echo "   - 白名单清理周期 [RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS]: ${RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS}s"
     echo -e "${BLUE}==========================================================${NC}"
@@ -244,22 +259,26 @@ EOF
     echo "   - 正在编译生成主 Nginx 及 Stream 四层核心路由配置文件..."
     
     # 🚀 [证书自签名保底调优]
-    # 如果检测到 Nginx 的默认证书路径下没有 cert.pem/key.pem 或 ca.pem，
+    # 如果检测到 Nginx 的证书路径下没有证书文件，
     # 自动在后台生成高保真自签名证书，让容器无论如何都能 100% 优雅冷启动开箱即用。
-    local cert_dir="/etc/nginx/certs"
-    local cert_file="${cert_dir}/cert.pem"
-    local key_file="${cert_dir}/key.pem"
-    local ca_file="${cert_dir}/ca.pem"
-    mkdir -p "$cert_dir"
+    local cert_file="${RG_SSL_CERT_PATH}"
+    local key_file="${RG_SSL_KEY_PATH}"
+    local ca_file="${RG_CLIENT_CA_CERT_PATH}"
+    
+    local cert_dir_parent=$(dirname "$cert_file")
+    local key_dir_parent=$(dirname "$key_file")
+    local ca_dir_parent=$(dirname "$ca_file")
+    mkdir -p "$cert_dir_parent" "$key_dir_parent" "$ca_dir_parent"
 
     if [ ! -s "$ca_file" ]; then
         echo "   - [证书保底] 未检测到合规的客户端 CA 证书，正在生成开发保底自签名 CA 证书..."
-        openssl genrsa -out "${cert_dir}/ca.key" 2048 2>/dev/null
-        openssl req -x509 -new -nodes -key "${cert_dir}/ca.key" \
+        local ca_key_file="${ca_dir_parent}/ca.key"
+        openssl genrsa -out "$ca_key_file" 2048 2>/dev/null
+        openssl req -x509 -new -nodes -key "$ca_key_file" \
             -sha256 -days 3650 \
             -subj "/C=CN/O=RestyGuard-Dev-CA/CN=RestyGuard Dev CA" \
             -out "$ca_file" 2>/dev/null
-        rm -f "${cert_dir}/ca.key"
+        rm -f "$ca_key_file"
     fi
 
     if [ ! -s "$cert_file" ] || [ ! -s "$key_file" ]; then
@@ -294,9 +313,9 @@ EOF
             echo "    listen 127.0.0.1:8443;"
         else
             echo "    listen 127.0.0.1:8443 ssl proxy_protocol;"
-            cat "${TEMPLATE_DIR}/ssl.conf.template"
+            envsubst '${RG_SSL_CERT_PATH} ${RG_SSL_KEY_PATH}' < "${TEMPLATE_DIR}/ssl.conf.template"
             if [ "$RG_NGINX_TLS_MODE" = "mtls" ]; then
-                cat "${TEMPLATE_DIR}/mtls.conf.template"
+                envsubst '${RG_CLIENT_CA_CERT_PATH}' < "${TEMPLATE_DIR}/mtls.conf.template"
             fi
             echo "    real_ip_header proxy_protocol;"
             echo "    set_real_ip_from 127.0.0.1;"

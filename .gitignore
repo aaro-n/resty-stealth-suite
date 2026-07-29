@@ -12,7 +12,6 @@
 **/certs/*.key
 **/ssl/*.pem
 **/ssl/*.key
-**/acme_cache/
 
 # 忽略本地开发真实的 .env 配置文件
 **/.env

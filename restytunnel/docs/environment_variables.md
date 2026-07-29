@@ -38,7 +38,6 @@
 | `RT_WHITELIST_IP_TTL_SECONDS` | (由 `RT_WHITELIST_IP_TTL_DAYS` 自动计算) | **白名单 IP 授权有效期**（单位：秒）。默认根据 `RT_WHITELIST_IP_TTL_DAYS` 自动计算（`天数 * 86400`）。如果设置此值，会覆盖自动计算结果。兼容旧版 `WHITELIST_IP_TTL_SECONDS`。|
 | `RT_ENABLE_VIEW_WHITELIST` | `true` | **是否允许在网页端面板查看活跃白名单列表**（隐私安全开关）。设为 `false` 时，该板块将被安全屏蔽，在多用户共用时保障横向隔离隐私。兼容旧版 `ENABLE_VIEW_WHITELIST`。|
 | `RT_ENABLE_VIEW_BLACKLIST` | `true` | **是否允许在网页端面板查看被阻断拦截日志**（隐私安全开关）。设为 `false` 时，该板块将被安全屏蔽。兼容旧版 `ENABLE_VIEW_BLACKLIST`。|
-| `RT_ENABLE_CF_AOP` | `false` | **Cloudflare 双向 mTLS 强校验开关**。设为 `true` 后，`RT_AUTH_DOMAIN` 整个域名会受到密码学级别的客户端证书校验，只有通过 CF 边缘节点代理的请求才能进入。兼容旧版 `ENABLE_CF_AOP`。|
 | `RT_USERS` | (由 `RT_PROXY_USERNAME` 和 `RT_PROXY_PASSWORD` 组成) | **多用户及 TOTP 认证配置**。格式如 `user1:pass1:totp_secret,user2:pass2`。若未配置，则自动降级为 `RT_PROXY_USERNAME:RT_PROXY_PASSWORD` 作为单个静态密码用户。|
 | `RT_SESSION_TTL_SECONDS` | `2592000` | **Web 控制台登录会话 Cookie 保持生存时间**（秒）。在登录成功后 Cookie 维持的时长，默认 30 天。兼容 `RT_SESSION_TTL` (支持 `d`, `h`, `m`, `s` 单位)。|
 | `RT_TOTP_VALID_WINDOW_SECONDS`| `300` | **TOTP 容差校验时间窗口大小**（秒）。默认 300 秒（前后各 150 秒均分容错），完美对齐 Google/Microsoft Authenticator 等手机端 APP 的时间步长。兼容 `RT_TOTP_VALID_WINDOW`。|
@@ -54,8 +53,10 @@
 | `RT_REAL_IP_HEADER` | `CF-Connecting-IP` | **【高级】指定用于获取真实客户端 IP 的 HTTP 请求头**。当您的 `RT_AUTH_DOMAIN` 前置了非 Cloudflare 的反代时，可将其设为 `X-Forwarded-For` 或 `X-Real-IP` 等。兼容旧版 `REAL_IP_HEADER`。|
 | `RT_REAL_IP_FROM` | (空) | **【高级】设定您信任的前置反向代理 IP/CIDR 列表（空格分隔）**。Nginx 只会信任来自这些地址的 `RT_REAL_IP_HEADER`。当不使用 Cloudflare 时，必须设为您自己的前置代理 IP。兼容旧版 `REAL_IP_FROM`。|
 | `RT_ENABLE_PROXY_PROTOCOL` | `false` | **启用 PROXY Protocol 接收和真实 IP 重写功能**。在将 TCP 直连代理（非卸载 TLS 盲直通）部署于 Fly.io 或 AWS ELB 四层负载均衡后端时，必须设为 `true`。兼容旧版 `ENABLE_PROXY_PROTOCOL`。|
-| `RT_ENABLE_CUSTOM_MTLS` | `false` | **【高级】自定义 mTLS 客户端认证开关**。设为 `true` 时，系统将忽略 `RT_ENABLE_CF_AOP`，并使用您指定的私有 CA 证书对 `RT_AUTH_DOMAIN` 进行双向认证。兼容旧版 `ENABLE_CUSTOM_MTLS`。|
-| `RT_CLIENT_CA_CERT_PATH` | `/etc/nginx/certs/my_ca.pem` | **【高级】您的私有客户端 CA 根证书在容器内的路径**。当 `RT_ENABLE_CUSTOM_MTLS` 开启时，您需要通过 `volumes` 将您的 CA 证书映射进来。兼容旧版 `CLIENT_CA_CERT_PATH`。|
+| `RT_ENABLE_CUSTOM_MTLS` | `false` | **【高级】自定义 mTLS 客户端认证开关**。设为 `true` 时，系统将使用您指定的私有 CA 证书或 Cloudflare 证书对 `RT_AUTH_DOMAIN` 进行双向认证（强校验，无证书直接拒绝）。兼容旧版 `ENABLE_CUSTOM_MTLS`。|
+| `RT_CLIENT_CA_CERT_PATH` | `/etc/nginx/ssl/ca.pem` | **【高级】您的客户端 CA 根证书在容器内的路径**（Cloudflare AOP 证书已内置在 `/etc/nginx/certs/cloudflare-origin-pull-ca.pem`）。当 `RT_ENABLE_CUSTOM_MTLS` 开启时，您需要通过 `volumes` 将您的 CA 证书映射进来。兼容旧版 `CLIENT_CA_CERT_PATH`。|
+| `RT_SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | **【高级】服务端 SSL 证书公钥（或 fullchain.pem）在容器内的路径**。支持自定义路径和文件名。兼容旧版 `SSL_CERT_PATH`。|
+| `RT_SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | **【高级】服务端 SSL 证书私钥（或 privkey.pem）在容器内的路径**。支持自定义路径和文件名。兼容旧版 `SSL_KEY_PATH`。|
 
 ---
 
@@ -83,5 +84,5 @@
 
 | 变量名 (推荐) | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| `RT_SSL_CERT_BASE64` | (空) | **Base64 编码后的 `fullchain.pem` 证书内容**。如果设置了此变量，容器启动时会自动解码并写入证书文件。兼容旧版 `SSL_CERT_BASE64`。|
-| `RT_SSL_KEY_BASE64` | (空) | **Base64 编码后的 `privkey.pem` 密钥内容**。如果设置了此变量，容器启动时会自动解码并写入密钥文件。兼容旧版 `SSL_KEY_BASE64`。|
+| `RT_SSL_CERT_BASE64` | (空) | **Base64 编码后的 `cert.pem` 证书内容**。如果设置了此变量，容器启动时会自动解码并写入证书文件。兼容旧版 `SSL_CERT_BASE64`。|
+| `RT_SSL_KEY_BASE64` | (空) | **Base64 编码后的 `key.pem` 密钥内容**。如果设置了此变量，容器启动时会自动解码并写入密钥文件。兼容旧版 `SSL_KEY_BASE64`。|

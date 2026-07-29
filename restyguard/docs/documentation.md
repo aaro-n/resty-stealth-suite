@@ -95,18 +95,12 @@ export RG_AUTH_DOMAIN=${RG_AUTH_DOMAIN:-localhost}
 *   **Worker 定时器**：基于 OpenResty 的 `ngx.timer.at` 在后台运行轻量级 Worker。无需借助外部系统的 `crontab`，即能自给自足地在容器内自动清理超期的白名单条目和裁剪庞大的拒绝日志文件，确保系统长时间无维护运行。
 
 ### 3.4 mTLS 模式下自签名客户端 CA 证书自动生成保底 (v3.8.1)
-*   **启动崩溃痛点**：在开启极速网关的 mTLS（双向认证，即 `RG_NGINX_TLS_MODE="mtls"`）时，如果宿主机未外挂或未在 `/etc/nginx/certs/` 目录下放置客户端验证所需的 `ca.pem`，Nginx 启动时会因为找不到客户端 CA 文件报出致命错误 `cannot load certificate "/etc/nginx/certs/ca.pem": BIO_new_file() failed`，导致容器陷入无限崩溃与重启循环中。
-*   **解决方案**：我们在启动引导脚本 `bootstrap.sh` 中对证书保底逻辑进行了升级调优。在原本自动生成自签名 TLS 服务端证书（`cert.pem` / `key.pem`）的基础上，新增了针对 `ca.pem` 的自适应缺失检测与自签名 CA 证书（包含 3650 天超长有效期）后台自动保底生成机制：
+*   **启动崩溃痛点**：在开启极速网关的 mTLS（双向认证，如 `RG_ENABLE_CUSTOM_MTLS="true"` 或 `RG_NGINX_TLS_MODE="mtls"`）时，如果宿主机未外挂或未在默认的 `/etc/nginx/ssl/` 目录下放置客户端验证所需的 `ca.pem`，Nginx 启动时会因为找不到客户端 CA 文件报出致命错误 `cannot load certificate "/etc/nginx/ssl/ca.pem": BIO_new_file() failed`，导致容器陷入无限崩溃与重启循环中。
+*   **解决方案**：我们在启动引导脚本 `bootstrap.sh` 中对证书保底逻辑进行了升级调优。在原本自动生成自签名 TLS 服务端证书（`cert.pem` / `key.pem`）的基础上，新增了针对 `ca.pem` 的自适应缺失检测与自签名 CA 证书（包含 3650 天超长有效期）后台自动保底生成机制（可根据环境变量自定义路径）：
     ```bash
-    if [ ! -s "$ca_file" ]; then
-        echo "   - [证书保底] 未检测到合规的客户端 CA 证书，正在生成开发保底自签名 CA 证书..."
-        openssl genrsa -out "${cert_dir}/ca.key" 2048 2>/dev/null
-        openssl req -x509 -new -nodes -key "${cert_dir}/ca.key" \
-            -sha256 -days 3650 \
-            -subj "/C=CN/O=RestyGuard-Dev-CA/CN=RestyGuard Dev CA" \
-            -out "$ca_file" 2>/dev/null
-        rm -f "${cert_dir}/ca.key"
-    fi
+    local cert_file="${RG_SSL_CERT_PATH}"
+    local key_file="${RG_SSL_KEY_PATH}"
+    local ca_file="${RG_CLIENT_CA_CERT_PATH}"
     ```
     本机制保证了即使云端无状态环境（如 `fly.io`）或本地直接全新运行，在缺省配置证书下也能 100% 优雅冷启动开箱即用。
 
@@ -314,7 +308,7 @@ $$\text{按主机名 (Per-Hostname)} > \text{区域级 (Zone-Level)} > \text{全
     ```nginx
     # 1. 允许客户端不带证书完成握手（建立连接保底）
     ssl_verify_client optional;
-    ssl_client_certificate /etc/nginx/certs/ca.pem;
+    ssl_client_certificate /etc/nginx/ssl/ca.pem;
 
     # 2. 在门禁/授权管理虚拟主机块里，对未通过证书校验的请求强制阻断
     server {

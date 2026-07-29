@@ -63,3 +63,7 @@
 | `RG_NGINX_PROXY_PROTOCOL`| `off` | 否 | **是否在 443 端口开启 PROXY Protocol 支持**。当部署在 L4 负载均衡器 (如 Fly.io, AWS ELB) 之后时，需设为 `on` 以获取真实客户端 IP。 |
 | `RG_NGINX_DNS_RESOLUTION_SECONDS`| `600` | 否 | **Nginx 内部 DNS 解析结果的缓存时间（秒）**。 |
 | `RG_NGINX_TLS_MODE` | `https` | 否 | **管理后台内部通信的 TLS 模式**。可选：`https` (标准 HTTPS), `mtls` (双向 TLS 认证), `http` (明文，仅用于调试)。 |
+| `RG_SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | 否 | **服务端 SSL 证书公钥（或 cert.pem）在容器内的绝对路径**。 |
+| `RG_SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | 否 | **服务端 SSL 证书私钥（或 key.pem）在容器内的绝对路径**。 |
+| `RG_CLIENT_CA_CERT_PATH` | `/etc/nginx/ssl/ca.pem` | 否 | **双向 mTLS 校验客户端证书 CA 根证书在容器内的绝对路径**。 |
+| `RG_ENABLE_CUSTOM_MTLS` | `false` | 否 | **自定义 mTLS 客户端认证开关**。设为 `true` 后，会自动将 `RG_NGINX_TLS_MODE` 强制切换为 `mtls`（强校验模式，无合规证书直接拦截）。 |

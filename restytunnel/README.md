@@ -98,7 +98,7 @@ docker-compose up -d --build
 ### 3. ⏰ 后台定时自动维护参数
 | 环境变量 | 默认值 | 作用说明 |
 | :--- | :--- | :--- |
-| **`ENABLE_CF_AOP`** | `false` | **Cloudflare 双向 mTLS 客户端证书强校验开关**。设为 `true` 开启，强制只有通过 CF 边缘代理携带证书的请求才能进入。 |
+| **`RT_ENABLE_CUSTOM_MTLS`** | `false` | **自定义 mTLS 客户端证书强校验开关**。设为 `true` 开启，强制只有提供合法客户端证书（如 Cloudflare AOP 证书）的请求才能进入。 |
 | **`TASK_CLEAN_WHITELIST_INTERVAL_SECONDS`**| `3600` | **后台自动扫描白名单过期数据库的运行周期（秒）**。默认每 1 小时后台默默运行清理。 |
 | **`TASK_CLEAN_LOG_INTERVAL_SECONDS`**| `60` | **后台自动清理被拒探测日志的运行周期（秒）**。默认每分钟自动缩减日志大小。 |
 | **`TASK_CLEAN_LOG_RETAIN_LINES`**| `100` | **被拒探测日志最多保留最新的行数**。默认保留最新的 100 行，防 RAM 临时文件系统占满。 |
@@ -111,8 +111,8 @@ docker-compose up -d --build
 
 #### 1. 证书放入项目目录
 登录您的 Cloudflare 后台，下载对应域名的 **15 年免费源站证书（Origin CA Certificate）**，重命名并放入项目本地的 `ssl/` 目录中：
-* `ssl/fullchain.pem`
-* `ssl/privkey.pem`
+* `ssl/cert.pem`
+* `ssl/key.pem`
 
 #### 2. 配置 docker-compose.yml 
 编辑 `docker-compose.yml` 中的环境变量配置（代理域名、授权域名、账号、密码及白名单路径，如上所述）。
@@ -126,7 +126,7 @@ docker-compose up -d --build
 #### 4. 在 Cloudflare 开启 AOP 双向证书防护 (推荐)
 * 进入 Cloudflare 对应域名的后台 ➔ **SSL/TLS** ➔ **源站服务器 (Origin Server)**。
 * 找到 **「验证源站拉取」 (Authenticated Origin Pulls)** 选项，点击 **开启 (ON)**。
-* 此时在配置中设置环境变量 **`ENABLE_CF_AOP=true`** 重启容器。您的管理域名将获得 100% 无法被源站扫描爆破的密码学级 mTLS 强盾牌！
+* 此时在配置中设置环境变量 **`RT_ENABLE_CUSTOM_MTLS=true`** 和 **`RT_CLIENT_CA_CERT_PATH=/etc/nginx/certs/cloudflare-origin-pull-ca.pem`** 重启容器。您的管理域名将获得 100% 无法被源站扫描爆破的密码学级 mTLS 强盾牌！
 
 ---
 

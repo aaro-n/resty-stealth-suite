@@ -10,9 +10,9 @@ COPY . /app
 WORKDIR /app
 
 # 创建 Nginx 运行所需要的目录并创建默认的路由配置文件
-RUN mkdir -p /run/nginx /etc/nginx/certs /etc/nginx/conf.d /etc/nginx/stream.d /etc/nginx/rules
+RUN mkdir -p /run/nginx /etc/nginx/ssl /etc/nginx/conf.d /etc/nginx/stream.d /etc/nginx/rules
 # 将证书文件复制到 Nginx 配置目录
-COPY certs/ /etc/nginx/certs/
+COPY certs/ /etc/nginx/ssl/
 # 复制默认路由规则文件
 COPY upstream_rules.conf /etc/nginx/rules/upstream_rules.conf
 # 移动入口脚本并赋予执行权限

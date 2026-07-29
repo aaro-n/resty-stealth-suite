@@ -25,7 +25,6 @@ services:
       - REJECTED_LOG_PATH=/dev/shm/rejected_ips.log  # 🎯 探测拦截记录物理文件路径控制 (默认基于 RAM 内存盘)
 
       # === 3. 高级调优开关 ===
-      - ENABLE_CF_AOP=false                    # Cloudflare 双向 mTLS 强校验开关 (建议配置好 CF Authenticated Origin Pulls 后开启)
       - NGINX_PORT=443                         # 容器运行监听端口 (默认 443，Fly.io 部署建议变更为 10443)
       - ENABLE_PROXY_PROTOCOL=false            # 🎯 开启 PROXY 协议接收支持 (如部署在 Fly.io 盲直通时设为 true)
       - PROXY_FALLBACK_BACKEND=https://cn.bing.com  # 🎯 代理域名专属回落后端 (不设则默认继承 FALLBACK_BACKEND)

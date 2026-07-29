@@ -36,7 +36,6 @@ env RT_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS;
 env RT_TASK_CLEAN_LOG_RETAIN_LINES;
 env RT_WHITELIST_DB_PATH;
 env RT_REJECTED_LOG_PATH;
-env RT_ENABLE_CF_AOP;
 env RT_ENABLE_CUSTOM_MTLS;
 
 http {
@@ -212,22 +211,6 @@ http {
 
         # 5. 动态 mTLS 配置注入点 (由 bootstrap.sh 脚本根据环境变量渲染)
         ${MTLS_INCLUDE_LINE}
-
-        # 🎯 [高级 mTLS 智能防护层] 如果开启了 mTLS 校验且验证失败，不返回 400 报错（防止指纹暴露），而是直接静默丢给伪装后端
-        # 注意：这里在 Lua 阶段进行审计并优雅拦截
-        rewrite_by_lua_block {
-            local enable_cf_aop = (os.getenv("RT_ENABLE_CF_AOP") or os.getenv("ENABLE_CF_AOP")) == "true"
-            local enable_custom_mtls = (os.getenv("RT_ENABLE_CUSTOM_MTLS") or os.getenv("ENABLE_CUSTOM_MTLS")) == "true"
-            
-            if (enable_cf_aop or enable_custom_mtls) then
-                local client_verify = ngx.var.ssl_client_verify
-                if client_verify ~= "SUCCESS" then
-                    ngx.log(ngx.WARN, "🔴 [BLOCK] [mTLS_FAILED] -> Client IP: ", ngx.var.remote_addr, " 试图访问授权页面，但未出示合法的客户端证书（状态: ", client_verify, "）。动作：静默反代伪装后端 (Bing)")
-                    ngx.exec("@backend")
-                    return
-                end
-            end
-        }
 
         # 6. 自助添加 IP 到白名单管理页面 (安全端点 URL)
         # 访问 URL: https://AUTH_DOMAIN/AUTH_PATH_PREFIX/SECRET_TOKEN

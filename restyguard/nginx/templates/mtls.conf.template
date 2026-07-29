@@ -1,4 +1,4 @@
 # File: nginx/templates/mtls.conf.template
 # Version: v3.0.0 (Genesis)
-ssl_client_certificate /etc/nginx/certs/ca.pem;
+ssl_client_certificate ${RG_CLIENT_CA_CERT_PATH};
 ssl_verify_client on;
