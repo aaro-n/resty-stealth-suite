@@ -589,7 +589,7 @@ EOF
         echo "        }"
         echo "        default_type application/json;"
         echo "        add_header Cache-Control \"no-cache, no-store, must-revalidate\";"
-        echo "        return 200 '{\n  \"name\": \"RestyGuard 安全网关 IP 自助管理控制台\",\n  \"short_name\": \"守卫控制台\",\n  \"description\": \"RestyGuard 动态 IP 白名单授权与自助管理端\",\n  \"start_url\": \"/\${RG_AUTH_PATH_PREFIX}/\${RG_SECRET_TOKEN}\",\n  \"display\": \"standalone\",\n  \"background_color\": \"#f4f7f6\",\n  \"theme_color\": \"#007bff\",\n  \"icons\": [\n    {\n      \"src\": \"data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>\uD83D\uDEE1\uFE0F</text></svg>\",\n      \"sizes\": \"512x512\",\n      \"type\": \"image/svg+xml\"\n    }\n  ]\n}';"
+        echo "        return 200 '{\n  \"name\": \"RestyGuard 安全网关 IP 自助管理控制台\",\n  \"short_name\": \"守卫控制台\",\n  \"description\": \"RestyGuard 动态 IP 白名单授权与自助管理端\",\n  \"start_url\": \"/${RG_AUTH_PATH_PREFIX}/${RG_SECRET_TOKEN}\",\n  \"display\": \"standalone\",\n  \"background_color\": \"#f4f7f6\",\n  \"theme_color\": \"#007bff\",\n  \"icons\": [\n    {\n      \"src\": \"data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>\uD83D\uDEE1\uFE0F</text></svg>\",\n      \"sizes\": \"512x512\",\n      \"type\": \"image/svg+xml\"\n    }\n  ]\n}';"
         echo "    }"
 
         # 动态生成控制台专属 PWA Service Worker，满足安装标准的同时，绝不进行本地文件缓存，杜绝任何页面更新滞后 Bug
@@ -627,7 +627,7 @@ EOF
         # 动态启用拦截日志查看端点
         if [ "$RG_SHOW_REJECTED_LOG" = "true" ]; then
             local reject_loc=$(envsubst '$RG_AUTH_PATH_PREFIX $RG_SECRET_TOKEN $RG_NGINX_REJECT_LOG_FILENAME' <<EOF
-    location = /\${RG_AUTH_PATH_PREFIX}/\${RG_SECRET_TOKEN}/\${RG_NGINX_REJECT_LOG_FILENAME} {
+    location = /${RG_AUTH_PATH_PREFIX}/${RG_SECRET_TOKEN}/${RG_NGINX_REJECT_LOG_FILENAME} {
 EOF
             )
             echo "$reject_loc"
@@ -640,7 +640,7 @@ EOF
         # 动态启用白名单文件查看端点
         if [ "$RG_SHOW_WHITELIST_DB" = "true" ]; then
             local whitelist_loc=$(envsubst '$RG_AUTH_PATH_PREFIX $RG_SECRET_TOKEN $RG_WHITELIST_DB_FILENAME' <<EOF
-    location = /\${RG_AUTH_PATH_PREFIX}/\${RG_SECRET_TOKEN}/\${RG_WHITELIST_DB_FILENAME} {
+    location = /${RG_AUTH_PATH_PREFIX}/${RG_SECRET_TOKEN}/${RG_WHITELIST_DB_FILENAME} {
 EOF
             )
             echo "$whitelist_loc"

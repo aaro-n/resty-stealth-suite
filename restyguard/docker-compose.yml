@@ -17,10 +17,7 @@ services:
 
       # === 2. 路由控制 (Key-Value 文件与环境变量自适应合并) ===
       # - RG_UPSTREAM_RULES_FILE=/etc/nginx/rules/upstream_rules.conf # 静态配置文件自定义位置 (不设采用默认)
-      - RG_STREAM_UPSTREAM_RULES=|                   # 🚀 极其护眼的全新多行等号环境变量路由规则表
-          - "git.yourdomain.com=192.168.1.10:443"
-          - "api.yourdomain.com=api-server:8443"
-          - "*=translate.googleapis.com:443"
+      - "RG_STREAM_UPSTREAM_RULES=- \"git.yourdomain.com=192.168.1.10:443\"\n          - \"api.yourdomain.com=api-server:8443\"\n          - \"*=translate.googleapis.com:443\""
 
       # === 3. 白名单生命周期 & 后台维护 ===
       - RG_WHITELIST_IP_TTL_SECONDS=86400            # 白名单单次授权持续有效期秒数 (默认 1 天)
