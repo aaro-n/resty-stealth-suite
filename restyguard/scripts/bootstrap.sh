@@ -168,20 +168,20 @@ print_env_summary() {
 
     # 🚀 [大吞吐多路由状态透露优化]
     # 如果 STREAM_UPSTREAM_RULES 或是 STREAM_UPSTREAM_MAP 里配置的路由特别多，直接全部打出来会严重刷屏。
-    # 采用自适应检测机制：统计出所有逗号分隔出的具体绑定的路由条数（并剔除空行），精简显示总数量和构成预览。
+    # 采用自适应检测机制：统计出所有逗号分隔出的具体绑定的路由条数（并剔除空行），精简显示总数量 and 构成预览。
     local total_env_routes=0
     local route_preview=""
     
     # 统计 STREAM_UPSTREAM_RULES 的路由数量
-    if [ -n "$STREAM_UPSTREAM_RULES" ]; then
-        local count=$(echo "$STREAM_UPSTREAM_RULES" | tr ',' '\n' | grep -v '^[[:space:]]*$' | wc -l)
+    if [ -n "$RG_STREAM_UPSTREAM_RULES" ]; then
+        local count=$(echo "$RG_STREAM_UPSTREAM_RULES" | tr ',' '\n' | grep -v '^[[:space:]]*$' | wc -l)
         total_env_routes=$((total_env_routes + count))
         route_preview="${route_preview} (含 ${count} 条等号路由)"
     fi
     
     # 统计 STREAM_UPSTREAM_MAP 的路由数量并累加
-    if [ -n "$STREAM_UPSTREAM_MAP" ]; then
-        local count=$(echo "$STREAM_UPSTREAM_MAP" | tr ',' '\n' | grep -v '^[[:space:]]*$' | wc -l)
+    if [ -n "$RG_STREAM_UPSTREAM_MAP" ]; then
+        local count=$(echo "$RG_STREAM_UPSTREAM_MAP" | tr ',' '\n' | grep -v '^[[:space:]]*$' | wc -l)
         total_env_routes=$((total_env_routes + count))
         route_preview="${route_preview} (含 ${count} 条旧版兼容路由)"
     fi
