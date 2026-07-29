@@ -8,10 +8,7 @@ FROM openresty/openresty:1.31-alpine
 RUN apk add --no-cache gettext openssl curl bash ca-certificates tzdata
 
 # 创建项目及 Nginx 运行目录
-RUN mkdir -p /app /etc/nginx/ssl /etc/nginx/certs /var/www/html
-
-# 下载 Cloudflare 官方 Authenticated Origin Pulls CA 根证书，用于 AOP (mTLS) 验证
-RUN curl -sSLo /etc/nginx/certs/cloudflare-origin-pull-ca.pem https://developers.cloudflare.com/ssl/static/authenticated_origin_pull_ca.pem
+RUN mkdir -p /app /etc/nginx/ssl /var/www/html
 
 # 设置工作目录
 WORKDIR /app
@@ -19,14 +16,14 @@ WORKDIR /app
 # 拷贝项目文件
 COPY . /app
 
-# 支持在编译构建镜像时，直接将 Lego 或本地 Actions 申请好的证书一键复制到运行时证书目录
+# 支持在编译构建镜像时，直接将 Lego 或本地 Actions 申请好的证书一键复制 to 运行时证书目录
 RUN if [ -d "/app/ssl" ] && [ "$(ls -A /app/ssl 2>/dev/null)" ]; then \
         cp -r /app/ssl/* /etc/nginx/ssl/ 2>/dev/null || true; \
     fi
 
 # 拷贝 AOP (mTLS) 证书
 RUN if [ -d "/app/nginx/certs" ]; then \
-        cp -r /app/nginx/certs/* /etc/nginx/certs/ 2>/dev/null || true; \
+        cp -r /app/nginx/certs/* /etc/nginx/ssl/ 2>/dev/null || true; \
     fi
 
 # 创建 Nginx 静态文件软链接
