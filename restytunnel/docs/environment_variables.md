@@ -54,7 +54,7 @@
 | `RT_REAL_IP_FROM` | (空) | **【高级】设定您信任的前置反向代理 IP/CIDR 列表（空格分隔）**。Nginx 只会信任来自这些地址的 `RT_REAL_IP_HEADER`。当不使用 Cloudflare 时，必须设为您自己的前置代理 IP。兼容旧版 `REAL_IP_FROM`。|
 | `RT_ENABLE_PROXY_PROTOCOL` | `false` | **启用 PROXY Protocol 接收和真实 IP 重写功能**。在将 TCP 直连代理（非卸载 TLS 盲直通）部署于 Fly.io 或 AWS ELB 四层负载均衡后端时，必须设为 `true`。兼容旧版 `ENABLE_PROXY_PROTOCOL`。|
 | `RT_ENABLE_CUSTOM_MTLS` | `false` | **【高级】自定义 mTLS 客户端认证开关**。设为 `true` 时，系统将使用您指定的私有 CA 证书或 Cloudflare 证书对 `RT_AUTH_DOMAIN` 进行双向认证（强校验，无证书直接拒绝）。兼容旧版 `ENABLE_CUSTOM_MTLS`。|
-| `RT_CLIENT_CA_CERT_PATH` | `/etc/nginx/ssl/ca.pem` | **【高级】您的客户端 CA 根证书在容器内的路径**（Cloudflare AOP 证书已内置在 `/etc/nginx/certs/cloudflare-origin-pull-ca.pem`）。当 `RT_ENABLE_CUSTOM_MTLS` 开启时，您需要通过 `volumes` 将您的 CA 证书映射进来。兼容旧版 `CLIENT_CA_CERT_PATH`。|
+| `RT_CLIENT_CA_CERT_PATH` | `/etc/nginx/ssl/ca.pem` | **【高级】您的客户端 CA 根证书在容器内的路径**。当 `RT_ENABLE_CUSTOM_MTLS` 开启时，默认会读取 `/etc/nginx/ssl/ca.pem`。如果是使用 Cloudflare AOP，只需将下载的 Cloudflare CA 证书放入 `ssl/` 目录并重命名为 `ca.pem` 即可。兼容旧版 `CLIENT_CA_CERT_PATH`。|
 | `RT_SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | **【高级】服务端 SSL 证书公钥（或 fullchain.pem）在容器内的路径**。支持自定义路径和文件名。兼容旧版 `SSL_CERT_PATH`。|
 | `RT_SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | **【高级】服务端 SSL 证书私钥（或 privkey.pem）在容器内的路径**。支持自定义路径和文件名。兼容旧版 `SSL_KEY_PATH`。|
 

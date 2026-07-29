@@ -21,11 +21,6 @@ RUN if [ -d "/app/ssl" ] && [ "$(ls -A /app/ssl 2>/dev/null)" ]; then \
         cp -r /app/ssl/* /etc/nginx/ssl/ 2>/dev/null || true; \
     fi
 
-# 拷贝 AOP (mTLS) 证书
-RUN if [ -d "/app/nginx/certs" ]; then \
-        cp -r /app/nginx/certs/* /etc/nginx/ssl/ 2>/dev/null || true; \
-    fi
-
 # 创建 Nginx 静态文件软链接
 RUN rm -rf /etc/nginx/conf.d/* && \
     mkdir -p /etc/nginx/conf.d

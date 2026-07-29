@@ -335,11 +335,10 @@ generate_nginx_config() {
     local TEMPLATE_PATH="/app/nginx/nginx.conf.template"
     local CONF_D_SRC="/app/nginx/conf.d"
     local LUA_SRC="/app/nginx/lua"
-    local CERTS_SRC="/app/nginx/certs"
     local OUTPUT_PATH="/etc/nginx/nginx.conf"
 
     # 确保运行文件夹存在
-    mkdir -p /etc/nginx/conf.d /etc/nginx/certs /etc/nginx/lua
+    mkdir -p /etc/nginx/conf.d /etc/nginx/ssl /etc/nginx/lua
 
     # A. 编译、渲染并拷贝模块化的子配置文件
     for f in "$CONF_D_SRC"/*; do
@@ -349,10 +348,7 @@ generate_nginx_config() {
         fi
     done
 
-    # B. 拷贝 AOP 根证书目录
-    cp -r "$CERTS_SRC"/* "/etc/nginx/certs/" 2>/dev/null || true
-
-    # C. 拷贝 Lua 核心处理模块
+    # B. 拷贝 Lua 核心处理模块
     cp -r "$LUA_SRC"/* "/etc/nginx/lua/" 2>/dev/null || true
 
     # D. 动态渲染最终主配置

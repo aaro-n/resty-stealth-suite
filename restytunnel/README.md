@@ -126,7 +126,8 @@ docker-compose up -d --build
 #### 4. 在 Cloudflare 开启 AOP 双向证书防护 (推荐)
 * 进入 Cloudflare 对应域名的后台 ➔ **SSL/TLS** ➔ **源站服务器 (Origin Server)**。
 * 找到 **「验证源站拉取」 (Authenticated Origin Pulls)** 选项，点击 **开启 (ON)**。
-* 此时在配置中设置环境变量 **`RT_ENABLE_CUSTOM_MTLS=true`** 和 **`RT_CLIENT_CA_CERT_PATH=/etc/nginx/certs/cloudflare-origin-pull-ca.pem`** 重启容器。您的管理域名将获得 100% 无法被源站扫描爆破的密码学级 mTLS 强盾牌！
+* 下载 Cloudflare 官方 CA 证书（`authenticated_origin_pull_ca.pem`），将其重命名为 `ca.pem` 并放入项目的 `./ssl/` 目录中。
+* 此时在配置中设置环境变量 **`RT_ENABLE_CUSTOM_MTLS=true`** 重启容器。您的管理域名将获得 100% 无法被源站扫描爆破的密码学级 mTLS 强盾牌！
 
 ---
 
