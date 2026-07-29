@@ -298,18 +298,46 @@ print_env_summary() {
     
     local masked_prefix=$(reveal_partially "${RT_AUTH_PATH_PREFIX}")
     local masked_token=$(reveal_partially "${RT_SECRET_TOKEN}")
-    local masked_user=$(reveal_partially "${RT_PROXY_USERNAME}")
-    local masked_pass=$(reveal_secure_val "${RT_PROXY_PASSWORD}")
+
+    # 动态解析出第一个控制台合规用户
+    local first_entry=$(echo "$RT_USERS" | cut -d',' -f1 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    local first_u=$(echo "$first_entry" | cut -d':' -f1)
+    local first_v1=$(echo "$first_entry" | cut -d':' -f2)
+    local first_v2=$(echo "$first_entry" | cut -d':' -f3 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+    local masked_admin_user=$(reveal_partially "$first_u")
+    local has_password="true"
+    local has_totp="false"
+    local masked_admin_pass=""
+
+    if [ "$first_v1" = "TOTP" ] && [ -n "$first_v2" ]; then
+        has_password="false"
+        has_totp="true"
+    elif [ -n "$first_v1" ] && [ -n "$first_v2" ]; then
+        has_password="true"
+        has_totp="true"
+        masked_admin_pass=$(reveal_secure_val "$first_v1")
+    else
+        has_password="true"
+        has_totp="false"
+        masked_admin_pass=$(reveal_secure_val "$first_v1")
+    fi
 
     # 场景 A: 开启了 IP 白名单防火墙
     if [ "$RT_ENABLE_IP_WHITELIST" = "true" ]; then
-        # 1. 自动加白直连管理链接 ( u=用户名 & p=密码 模式)
-        echo -e "   👉 ${YELLOW}[一键自动加白网页控制台主链接]${NC} (安全脱敏示例)"
-        echo -e "      https://${RT_AUTH_DOMAIN}/${masked_prefix}/${masked_token}?u=${masked_user}&p=${masked_pass}"
-        echo ""
-        echo -e "   👉 ${YELLOW}[新设备/动态密码 TOTP 登录链接]${NC} (若配置了 TOTP 种子)"
-        echo -e "      https://${RT_AUTH_DOMAIN}/${masked_prefix}/${masked_token}?u=${masked_user}&code=[您的6位手机动态验证码]"
-        echo ""
+        if [ "$has_password" = "true" ]; then
+            # 1. 自动加白直连管理链接 ( u=用户名 & p=密码 模式)
+            echo -e "   👉 ${YELLOW}[一键自动加白网页控制台主链接]${NC} (安全脱敏示例)"
+            echo -e "      https://${RT_AUTH_DOMAIN}/${masked_prefix}/${masked_token}?u=${masked_admin_user}&p=${masked_admin_pass}"
+            echo ""
+        fi
+        
+        if [ "$has_totp" = "true" ] || [ "$first_v1" = "TOTP" ]; then
+            echo -e "   👉 ${YELLOW}[新设备/动态密码 TOTP 登录链接]${NC} (若配置了 TOTP 种子)"
+            echo -e "      https://${RT_AUTH_DOMAIN}/${masked_prefix}/${masked_token}?u=${masked_admin_user}&code=[您的6位手机动态验证码]"
+            echo ""
+        fi
+        
         echo -e "   👉 ${YELLOW}[已授权设备的 30天 免密访问主链接]${NC} (安全脱敏示例)"
         echo -e "      https://${RT_AUTH_DOMAIN}/${masked_prefix}/${masked_token}"
         echo ""
@@ -319,12 +347,15 @@ print_env_summary() {
         echo ""
     fi
 
+    local masked_proxy_user=$(reveal_partially "${RT_PROXY_USERNAME}")
+    local masked_proxy_pass=$(reveal_secure_val "${RT_PROXY_PASSWORD}")
+
     # 2. HTTP 代理服务器配置说明
     echo -e "   👉 ${YELLOW}[HTTPS 正向代理配置参考 (小火箭/SwitchyOmega/Shadowrocket)]${NC} (安全脱敏示例)"
     echo -e "      - 代理服务器 (Host): ${RT_PROXY_DOMAIN}"
     echo -e "      - 代理端口 (Port):   443"
-    echo -e "      - 认证用户名 (User):  ${masked_user}"
-    echo -e "      - 认证密码 (Pass):    ${masked_pass}"
+    echo -e "      - 认证用户名 (User):  ${masked_proxy_user}"
+    echo -e "      - 认证密码 (Pass):    ${masked_proxy_pass}"
     echo -e "${GREEN}==========================================================${NC}"
     echo ""
 }
