@@ -170,12 +170,89 @@ print_env_summary() {
         fi
     }
 
+    # 辅助安全半脱敏透露函数：根据字符串实际长度，智能透露首尾部分，中间隐藏
+    reveal_partially() {
+        local val="$1"
+        local len=${#val}
+        if [ "$len" -le 2 ]; then
+            echo "**"
+        elif [ "$len" -le 5 ]; then
+            local head=$(echo "$val" | cut -c 1)
+            local tail=$(echo "$val" | cut -c $len)
+            echo "${head}***${tail}"
+        else
+            local half=$((len / 3))
+            [ "$half" -lt 1 ] && half=1
+            local head=$(echo "$val" | cut -c 1-$half)
+            local tail=$(echo "$val" | cut -c $((len - half + 1))-$len)
+            echo "${head}***${tail}"
+        fi
+    }
+
+    parse_users_summary() {
+        local raw_users="$1"
+        if [ -z "$raw_users" ]; then
+            echo "   - 暂无配置用户"
+            return
+        fi
+
+        local total_users=0
+        local totp_users=0
+        local displayed_count=0
+        
+        # 将逗号替换为空格进行遍历，兼容可能有空格的情况
+        local IFS_old="$IFS"
+        IFS=','
+        for user_entry in $raw_users; do
+            # 去除首尾空格
+            user_entry=$(echo "$user_entry" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            if [ -n "$user_entry" ]; then
+                total_users=$((total_users + 1))
+                
+                # 解析字段
+                local username=""
+                local val1=""
+                local val2=""
+                
+                # 使用 IFS=':' 切分
+                local part1=$(echo "$user_entry" | cut -d':' -f1)
+                local part2=$(echo "$user_entry" | cut -d':' -f2)
+                local part3=$(echo "$user_entry" | cut -d':' -f3)
+                
+                username="$part1"
+                val1="$part2"
+                part3=$(echo "$part3" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                
+                local auth_type="密码验证"
+                if [ "$val1" = "TOTP" ] && [ -n "$part3" ]; then
+                    auth_type="TOTP 双向验证"
+                    totp_users=$((totp_users + 1))
+                elif [ -n "$val1" ] && [ -n "$part3" ]; then
+                    auth_type="密码/TOTP 双重验证"
+                    totp_users=$((totp_users + 1))
+                fi
+                
+                if [ "$displayed_count" -lt 3 ]; then
+                    local masked_user=$(reveal_partially "$username")
+                    echo "     -> 用户 $((displayed_count + 1)): ${masked_user} [认证方式: ${auth_type}]"
+                    displayed_count=$((displayed_count + 1))
+                fi
+            fi
+        done
+        IFS="$IFS_old"
+        
+        if [ "$total_users" -gt 3 ]; then
+            echo "     -> ... 以及其余 $((total_users - 3)) 个用户 ..."
+        fi
+        echo "   - [用户统计] 累计配置了 ${total_users} 个用户，其中包含 ${totp_users} 个 TOTP 双向验证安全用户。"
+    }
+
     echo "=> [2/4] 正在加载打印环境状态监控参数..."
     echo -e "${BLUE}==========================================================${NC}"
     echo -e "${BLUE}          RestyTunnel 运行环境变量配置参数                 ${NC}"
     echo -e "${BLUE}==========================================================${NC}"
     echo "   - 代理业务域名 [RT_PROXY_DOMAIN]:     ${RT_PROXY_DOMAIN}"
-    echo "   - 默认代理账号 [RT_PROXY_USERNAME]:   ${RT_PROXY_USERNAME}"
+    echo "   - 默认代理账号 [RT_PROXY_USERNAME]:   $(reveal_partially "${RT_PROXY_USERNAME}")"
     echo -n "   - 默认代理密码 [RT_PROXY_PASSWORD]:   "
     reveal_secure_val "$RT_PROXY_PASSWORD"
     echo "   - 容器服务端口 [RT_NGINX_PORT]:       ${RT_NGINX_PORT}"
@@ -187,12 +264,13 @@ print_env_summary() {
     echo "   - 开启白名单 [RT_ENABLE_IP_WHITELIST]: ${RT_ENABLE_IP_WHITELIST}"
     if [ "$RT_ENABLE_IP_WHITELIST" = "true" ]; then
     echo "   - 授权管理域名 [RT_AUTH_DOMAIN]:      ${RT_AUTH_DOMAIN}"
-    echo "   - 授权管理路径 [RT_AUTH_PATH_PREFIX]: /${RT_AUTH_PATH_PREFIX}"
+    echo "   - 授权管理路径 [RT_AUTH_PATH_PREFIX]: /$(reveal_partially "${RT_AUTH_PATH_PREFIX}")"
     echo -n "   - 授权安全密令 [RT_SECRET_TOKEN]:     "
     reveal_secure_val "$RT_SECRET_TOKEN"
     echo "   - 授权天数 TTL [RT_WHITELIST_IP_TTL_DAYS]: ${RT_WHITELIST_IP_TTL_DAYS} 天"
     echo "   - 授权秒数 TTL [RT_WHITELIST_IP_TTL_SECONDS]: ${RT_WHITELIST_IP_TTL_SECONDS} 秒"
-    echo "   - 多用户/TOTP 配置 [RT_USERS]:        $(reveal_secure_val "$RT_USERS")"
+    echo "   - 多用户/TOTP 配置列表 [RT_USERS]："
+    parse_users_summary "$RT_USERS"
     echo "   - 拦截日志最大行数 [RT_TASK_CLEAN_LOG_RETAIN_LINES]: ${RT_TASK_CLEAN_LOG_RETAIN_LINES} 行"
     echo "   - 允许网页查看白名单 [RT_ENABLE_VIEW_WHITELIST]: ${RT_ENABLE_VIEW_WHITELIST}"
     echo "   - 允许网页查看拦截日志 [RT_ENABLE_VIEW_BLACKLIST]: ${RT_ENABLE_VIEW_BLACKLIST}"
@@ -218,17 +296,22 @@ print_env_summary() {
     echo -e "${GREEN}             RestyTunnel 极速直连与一键加白指南            ${NC}"
     echo -e "${GREEN}==========================================================${NC}"
     
+    local masked_prefix=$(reveal_partially "${RT_AUTH_PATH_PREFIX}")
+    local masked_token=$(reveal_partially "${RT_SECRET_TOKEN}")
+    local masked_user=$(reveal_partially "${RT_PROXY_USERNAME}")
+    local masked_pass=$(reveal_secure_val "${RT_PROXY_PASSWORD}")
+
     # 场景 A: 开启了 IP 白名单防火墙
     if [ "$RT_ENABLE_IP_WHITELIST" = "true" ]; then
         # 1. 自动加白直连管理链接 ( u=用户名 & p=密码 模式)
-        echo -e "   👉 ${YELLOW}[一键自动加白网页控制台主链接]${NC}"
-        echo -e "      https://${RT_AUTH_DOMAIN}/${RT_AUTH_PATH_PREFIX}/${RT_SECRET_TOKEN}?u=${RT_PROXY_USERNAME}&p=${RT_PROXY_PASSWORD}"
+        echo -e "   👉 ${YELLOW}[一键自动加白网页控制台主链接]${NC} (安全脱敏示例)"
+        echo -e "      https://${RT_AUTH_DOMAIN}/${masked_prefix}/${masked_token}?u=${masked_user}&p=${masked_pass}"
         echo ""
         echo -e "   👉 ${YELLOW}[新设备/动态密码 TOTP 登录链接]${NC} (若配置了 TOTP 种子)"
-        echo -e "      https://${RT_AUTH_DOMAIN}/${RT_AUTH_PATH_PREFIX}/${RT_SECRET_TOKEN}?u=${RT_PROXY_USERNAME}&code=[您的6位手机动态验证码]"
+        echo -e "      https://${RT_AUTH_DOMAIN}/${masked_prefix}/${masked_token}?u=${masked_user}&code=[您的6位手机动态验证码]"
         echo ""
-        echo -e "   👉 ${YELLOW}[已授权设备的 30天 免密访问主链接]${NC}"
-        echo -e "      https://${RT_AUTH_DOMAIN}/${RT_AUTH_PATH_PREFIX}/${RT_SECRET_TOKEN}"
+        echo -e "   👉 ${YELLOW}[已授权设备的 30天 免密访问主链接]${NC} (安全脱敏示例)"
+        echo -e "      https://${RT_AUTH_DOMAIN}/${masked_prefix}/${masked_token}"
         echo ""
     else
         # 场景 B: 未开启 IP 白名单防火墙
@@ -237,11 +320,11 @@ print_env_summary() {
     fi
 
     # 2. HTTP 代理服务器配置说明
-    echo -e "   👉 ${YELLOW}[HTTPS 正向代理配置参考 (小火箭/SwitchyOmega/Shadowrocket)]${NC}"
+    echo -e "   👉 ${YELLOW}[HTTPS 正向代理配置参考 (小火箭/SwitchyOmega/Shadowrocket)]${NC} (安全脱敏示例)"
     echo -e "      - 代理服务器 (Host): ${RT_PROXY_DOMAIN}"
     echo -e "      - 代理端口 (Port):   443"
-    echo -e "      - 认证用户名 (User):  ${RT_PROXY_USERNAME}"
-    echo -e "      - 认证密码 (Pass):    ${RT_PROXY_PASSWORD}"
+    echo -e "      - 认证用户名 (User):  ${masked_user}"
+    echo -e "      - 认证密码 (Pass):    ${masked_pass}"
     echo -e "${GREEN}==========================================================${NC}"
     echo ""
 }

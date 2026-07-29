@@ -89,6 +89,83 @@ print_env_summary() {
         fi
     }
 
+    # 辅助安全半脱敏透露函数：根据字符串实际长度，智能透露首尾部分，中间隐藏
+    reveal_partially() {
+        local val="$1"
+        local len=${#val}
+        if [ "$len" -le 2 ]; then
+            echo "**"
+        elif [ "$len" -le 5 ]; then
+            local head=$(echo "$val" | cut -c 1)
+            local tail=$(echo "$val" | cut -c $len)
+            echo "${head}***${tail}"
+        else
+            local half=$((len / 3))
+            [ "$half" -lt 1 ] && half=1
+            local head=$(echo "$val" | cut -c 1-$half)
+            local tail=$(echo "$val" | cut -c $((len - half + 1))-$len)
+            echo "${head}***${tail}"
+        fi
+    }
+
+    parse_users_summary() {
+        local raw_users="$1"
+        if [ -z "$raw_users" ]; then
+            echo "   - 暂无配置用户"
+            return
+        fi
+
+        local total_users=0
+        local totp_users=0
+        local displayed_count=0
+        
+        # 将逗号替换为空格进行遍历，兼容可能有空格的情况
+        local IFS_old="$IFS"
+        IFS=','
+        for user_entry in $raw_users; do
+            # 去除首尾空格
+            user_entry=$(echo "$user_entry" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            if [ -n "$user_entry" ]; then
+                total_users=$((total_users + 1))
+                
+                # 解析字段
+                local username=""
+                local val1=""
+                local val2=""
+                
+                # 使用 IFS=':' 切分
+                local part1=$(echo "$user_entry" | cut -d':' -f1)
+                local part2=$(echo "$user_entry" | cut -d':' -f2)
+                local part3=$(echo "$user_entry" | cut -d':' -f3)
+                
+                username="$part1"
+                val1="$part2"
+                part3=$(echo "$part3" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                
+                local auth_type="密码验证"
+                if [ "$val1" = "TOTP" ] && [ -n "$part3" ]; then
+                    auth_type="TOTP 双向验证"
+                    totp_users=$((totp_users + 1))
+                elif [ -n "$val1" ] && [ -n "$part3" ]; then
+                    auth_type="密码/TOTP 双重验证"
+                    totp_users=$((totp_users + 1))
+                fi
+                
+                if [ "$displayed_count" -lt 3 ]; then
+                    local masked_user=$(reveal_partially "$username")
+                    echo "     -> 用户 $((displayed_count + 1)): ${masked_user} [认证方式: ${auth_type}]"
+                    displayed_count=$((displayed_count + 1))
+                fi
+            fi
+        done
+        IFS="$IFS_old"
+        
+        if [ "$total_users" -gt 3 ]; then
+            echo "     -> ... 以及其余 $((total_users - 3)) 个用户 ..."
+        fi
+        echo "   - [用户统计] 累计配置了 ${total_users} 个用户，其中包含 ${totp_users} 个 TOTP 双向验证安全用户。"
+    }
+
     # 🚀 [大吞吐多路由状态透露优化]
     # 如果 STREAM_UPSTREAM_RULES 或是 STREAM_UPSTREAM_MAP 里配置的路由特别多，直接全部打出来会严重刷屏。
     # 采用自适应检测机制：统计出所有逗号分隔出的具体绑定的路由条数（并剔除空行），精简显示总数量和构成预览。
@@ -124,16 +201,15 @@ print_env_summary() {
     echo "   - 动态环境变量路由: 累计合并载入 ${total_env_routes} 条动态域名路由${route_preview}"
     echo "   - DNS 缓存时间 [RG_NGINX_DNS_RESOLUTION_SECONDS]: ${RG_NGINX_DNS_RESOLUTION_SECONDS}s"
     echo "   - 开启 PROXY 协议 [RG_NGINX_PROXY_PROTOCOL]: ${RG_NGINX_PROXY_PROTOCOL}"
-    echo -n "   - 认证子路径前缀 [RG_AUTH_PATH_PREFIX]: "
-    reveal_secure_val "$RG_AUTH_PATH_PREFIX"
+    echo "   - 认证子路径前缀 [RG_AUTH_PATH_PREFIX]: /$(reveal_partially "${RG_AUTH_PATH_PREFIX}")"
     echo -n "   - 授权安全密令 [RG_SECRET_TOKEN]: "
     reveal_secure_val "$RG_SECRET_TOKEN"
     echo "   - 授权有效天数 (TTL): $(($RG_WHITELIST_IP_TTL_SECONDS / 86400)) 天 (${RG_WHITELIST_IP_TTL_SECONDS} 秒)"
     echo "   - 运行容器时区 [RG_TZ]: ${RG_TZ}"
     echo "   - TLS 传输模式 [RG_NGINX_TLS_MODE]: ${RG_NGINX_TLS_MODE}"
     if [ -n "$RG_NGINX_USERS" ]; then
-        echo -n "   - 多用户配置列表 [RG_NGINX_USERS]: "
-        reveal_secure_val "$RG_NGINX_USERS"
+        echo "   - 多用户配置列表 [RG_NGINX_USERS]："
+        parse_users_summary "$RG_NGINX_USERS"
     fi
     echo "   - 允许任意域名访问 [RG_AUTH_ALLOW_ANY_DOMAIN]: ${RG_AUTH_ALLOW_ANY_DOMAIN}"
     echo "   - 允许管理端域名 [RG_AUTH_DOMAIN]: ${RG_AUTH_DOMAIN}"
@@ -155,6 +231,43 @@ print_env_summary() {
     echo "   - 日志清理周期 [RG_TASK_CLEAN_LOG_INTERVAL_SECONDS]: ${RG_TASK_CLEAN_LOG_INTERVAL_SECONDS}s (保留最新 ${RG_TASK_CLEAN_LOG_RETAIN_LINES} 行)"
     echo "   - 白名单清理周期 [RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS]: ${RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS}s"
     echo -e "${BLUE}==========================================================${NC}"
+
+    # 🚀 [双域名极速直连一键加白与控制台配置整合链接生成器 - RestyGuard]
+    echo ""
+    echo -e "${GREEN}==========================================================${NC}"
+    echo -e "${GREEN}             RestyGuard 极速直连与一键加白指南            ${NC}"
+    echo -e "${GREEN}==========================================================${NC}"
+    
+    local masked_prefix=$(reveal_partially "${RG_AUTH_PATH_PREFIX}")
+    local masked_token=$(reveal_partially "${RG_SECRET_TOKEN}")
+    
+    # 获取第一个配置的用户，作为安全示例中的默认用户名
+    local first_user="[您的用户名]"
+    if [ -n "$RG_NGINX_USERS" ]; then
+        local first_entry=$(echo "$RG_NGINX_USERS" | cut -d',' -f1 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        first_user=$(echo "$first_entry" | cut -d':' -f1)
+    fi
+    local masked_user=$(reveal_partially "$first_user")
+
+    # 场景 A: 开启了 IP 白名单防火墙
+    if [ "$RG_ENABLE_IP_WHITELIST" = "true" ]; then
+        # 1. 自动加白直连管理链接 ( u=用户名 & p=密码 模式)
+        echo -e "   👉 ${YELLOW}[一键自动加白网页控制台主链接]${NC} (安全脱敏示例)"
+        echo -e "      https://${RG_AUTH_DOMAIN}/${masked_prefix}/${masked_token}?u=${masked_user}&p=[您的密码]"
+        echo ""
+        echo -e "   👉 ${YELLOW}[新设备/动态密码 TOTP 登录链接]${NC} (若配置了 TOTP 种子)"
+        echo -e "      https://${RG_AUTH_DOMAIN}/${masked_prefix}/${masked_token}?u=${masked_user}&code=[您的6位手机动态验证码]"
+        echo ""
+        echo -e "   👉 ${YELLOW}[已授权设备的 30天 免密访问主链接]${NC} (安全脱敏示例)"
+        echo -e "      https://${RG_AUTH_DOMAIN}/${masked_prefix}/${masked_token}"
+        echo ""
+    else
+        # 场景 B: 未开启 IP 白名单防火墙
+        echo -e "   🔓 ${YELLOW}当前未开启 IP 白名单限制，业务端口已处于公开透传形态。${NC}"
+        echo ""
+    fi
+    echo -e "${GREEN}==========================================================${NC}"
+    echo ""
 }
 
 # ========================================================
