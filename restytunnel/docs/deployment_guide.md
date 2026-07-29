@@ -44,13 +44,98 @@ javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFI
 
 ---
 
-## 🔬 三、 核心技术澄清：如何确保公网链路是 HTTP/2 或 HTTP/3？
+## 🔬 三、 核心技术澄清：代理协议与安全性能
 
-### 💡 1. 为什么不需要担心 HTTP/1.1 的公网指纹？
-在 RestyTunnel 架构中，一个非常容易被误解的概念是“内部协议降维成 HTTP/1.1”。
-**我们郑重澄清：HTTP/1.1 协议绝对不会流向公网，它仅在服务器内部的私密 RAM 内存中流转！**
-* **公网（公网网卡 ➔ Nginx 外层）：** 100% 运行在标准的 **HTTP/2 (H2)** 或 **HTTP/3 (H3/QUIC)** 之上。在 TLS 握手协商（ALPN 阶段）时，客户端与 Nginx 443 就已经达成了 H2 或 H3 语言。外部网络监听器在公网上抓包，只能看到标准的二进制 H2 帧或 H3 UDP 报文，完全没有明文的 `CONNECT target.com HTTP/1.1` 字眼。
-* **内网（Nginx 内存 ➔ tunnel_pass 核心）：** 数据在内存中解密后，Lua 模块把连接标记为 `HTTP/1.1`，仅是为了满足 1.31 开源版内置 `tunnel_pass` 状态机的读取规范。这一过程发生在服务器 RAM 内部，外部防火墙根本无法窥探。
+在 RestyTunnel 架构中，关于协议的划分和数据传输安全，有一些极其关键的技术细节需要向您理清：
+
+### 1. 为什么管理端（AUTH_DOMAIN）使用 HTTP/2 & HTTP/3？
+* **极速自助授权**：用于 IP 加白、多用户管理和控制台登录的 `AUTH_DOMAIN`，在 Nginx 中完全开启了对 **HTTP/2 (H2)** 和 **HTTP/3 (QUIC/H3)** 的支持。
+* **极速体验**：这能保证您在手机或桌面浏览器访问控制台、使用“一键加白智能书签”时，享受到 0-RTT/1-RTT 的极速页面加载与高并发防抖性能。
+
+### 2. 为什么代理端（PROXY_DOMAIN）强制运行于 HTTP/1.1 TLS 1.3 之下？
+* **原生核心要求**：因为 Nginx 1.31 核心中内置的 `tunnel_pass`（四层盲转）指令仅支持标准的 HTTP/1.1 文本 CONNECT 指令。如果浏览器在连接代理时与 Nginx 协商了 HTTP/2，Chrome 会发送 H2 CONNECT 数据帧，这超出了 Nginx 原生模块的解析能力，会导致浏览器报错 `ERR_TUNNEL_CONNECTION_FAILED`。
+* **安全完全不妥协**：为此，我们在代理服务虚拟主机中强制配置了 `http2 off;` 和 `http3 off;`。
+* **为什么绝对安全？**：虽然客户端发送的是 HTTP/1.1 格式的 `CONNECT`，但这个传输动作是发生在 **最外层 TLS 1.3 加密信道** 的内部！公网上的任何深度包检测（DPI）或者网络监视器在抓包时，只能看到 TLS 1.3 标准握手包和标准的二进制乱码。**明文的 `CONNECT` 指令在内网内存中传输，公网完全看不见**，具有顶级的指纹隐蔽性。
+
+---
+
+## 💻 四、 客户端配置与自研开发示例
+
+由于代理运行于极佳的 HTTPS (TLS 1.3) 盲加密隧道下，客户端工具无需强开不支持的 H2，而是使用标准连接即可直接通网。
+
+### 1. 桌面端浏览器配置 (SwitchyOmega)
+在 Chrome 中安装 **Proxy SwitchyOmega** 插件并进行如下配置：
+1. **代理协议**：必须且只能选择 **`HTTPS`** (⚠️ 绝对不能选择普通的 HTTP)。
+2. **代理服务器 (Host)**：填写您的代理域名（如 `your-proxy-domain.com`）。
+3. **端口 (Port)**：`443`。
+4. 点击右侧的 **“锁”图标**，输入您的代理账号（`RT_PROXY_USERNAME`）和密码（`RT_PROXY_PASSWORD`）并保存。
+5. **开启白名单时的无感使用**：一旦您的 IP 已经在控制台加白，浏览器启动时就会在第一包请求中主动携带您的加密账密，一次性通过安全大闸，丝滑通网。
+
+### 2. Python 自研客户端开发 (以 `curl_cffi` 为例)
+在 Python 脚本中，普通的 `requests` 默认指纹过于单一。我们强烈推荐使用 **`curl_cffi`**，它在底层使用与 Chrome 一致的 TLS 指纹，同时完美支持 HTTPS 代理：
+
+```python
+# File: client.py
+# Description: 专属桌面端抗检测高隐蔽代理请求示例
+
+from curl_cffi import requests
+
+# 配置标准的 HTTPS 域名代理及账密
+proxies = {
+    "https": "https://nyd1tz:w6mghyklx6lz0f2b@your-proxy-domain.com:443",
+    "http": "http://nyd1tz:w6mghyklx6lz0f2b@your-proxy-domain.com:443"
+}
+
+try:
+    print("正在通过 HTTPS TLS 1.3 盲加密隧道进行网络传输...")
+    # browser="chrome" 会自动整合 JA3/JA4 握手指纹，防范特征探测
+    response = requests.get(
+        "https://www.google.com", 
+        proxies=proxies, 
+        browser="chrome", 
+        timeout=10
+    )
+    print("==========================================================")
+    print(" [成功] 代理通信完美跑通！")
+    print(f"   - 目标源站返回字节大小: {len(response.text)} 字节")
+    print("==========================================================")
+except Exception as e:
+    print(f" [失败] 连接被阻断或鉴权错误: {e}")
+```
+
+### 3. Go 语言自研客户端示例
+在 Go 语言中进行安全的 HTTPS 代理开发，只需标准库的 `Transport.Proxy` 即可，底层会自动套在加密 TLS 中发送 CONNECT：
+
+```go
+package main
+
+import (
+	"crypto/tls"
+	"fmt"
+	"net/http"
+	"net/url"
+)
+
+func main() {
+	proxyUrl, _ := url.Parse("https://nyd1tz:w6mghyklx6lz0f2b@your-proxy-domain.com:443")
+	
+	transport := &http.Transport{
+		Proxy: http.ProxyURL(proxyUrl),
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS13, // 强制 TLS 1.3 安全握手
+		},
+	}
+	client := &http.Client{ Transport: transport }
+
+	resp, err := client.Get("https://www.wikipedia.org")
+	if err == nil {
+		fmt.Println("连接维基百科成功，状态码:", resp.Status)
+		resp.Body.Close()
+	} else {
+		fmt.Println("连接失败:", err)
+	}
+}
+```
 
 ---
 
