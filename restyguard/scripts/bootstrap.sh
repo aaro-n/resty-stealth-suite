@@ -382,17 +382,6 @@ EOF
     rm -f "$ip_map_file" "$provider_map_file"
     echo "     -> [IP 模块] 编译并写入 ${ip_val_output} 成功。"
 
-    # --- 3b. 生成 Basic Auth 密钥 (原 21-generate-htpasswd.sh) ---
-    local htpasswd_path="/etc/nginx/.htpasswd"
-    export HTPASSWD_PATH="$htpasswd_path"
-    if [ "$AUTH_MODE" = "userpass" ] && [ -n "$NGINX_USER" ] && [ -n "$NGINX_USER_PASSWORD" ]; then
-        echo "   - [认证模块] 检测到 Basic Auth 模式已启用，正在写入鉴权凭证..."
-        htpasswd -b -c "$htpasswd_path" "$NGINX_USER" "$NGINX_USER_PASSWORD"
-    else
-        echo "   - [认证模块] Basic Auth 未启用，创建空保底凭证。"
-        touch "$htpasswd_path"
-    fi
-
     # --- 3c. 编译核心及 Stream 路由配置 (原 22-generate-core-configs.sh) ---
     echo "   - 正在编译生成主 Nginx 及 Stream 四层核心路由配置文件..."
     
