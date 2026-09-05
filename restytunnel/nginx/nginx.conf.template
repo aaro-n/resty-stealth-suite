@@ -46,6 +46,9 @@ http {
     # 数据的读写完全由 C 语言在纯物理 RAM 中以高效 Hash 树结构维护，天然跨 Worker 线程安全共享，彻底规避文件 I/O 开销，读写性能提升至微秒级！
     lua_shared_dict whitelist_dict 10m;
 
+    # 🟤 [错密黑名单] 共享内存字典：错密计数 + 拉黑标记，自带 TTL 自动过期，零磁盘 I/O。
+    lua_shared_dict blacklist_dict 10m;
+
     # [自动维护机制] 每个 Worker 进程启动时，通过 Worker 0 初始化后台白名单定时清理
     init_worker_by_lua_block {
         -- 🚀 [极致内存与时延调优] 优化 Lua 虚拟机垃圾回收 (GC) 策略。

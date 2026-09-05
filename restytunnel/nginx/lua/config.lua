@@ -76,4 +76,12 @@ _M.max_log_lines = tonumber(os.getenv("RT_TASK_CLEAN_LOG_RETAIN_LINES") or os.ge
 _M.whitelist_db_path = os.getenv("RT_WHITELIST_DB_PATH") or os.getenv("WHITELIST_DB_PATH") or "/dev/shm/whitelist.db"
 _M.rejected_log_path = os.getenv("RT_REJECTED_LOG_PATH") or os.getenv("REJECTED_LOG_PATH") or "/dev/shm/rejected_ips.log"
 
+-- 8. 🟤 [错密黑名单] 防爆破减速带：仅对「带凭证但密码错误」的请求计数，达阈值拉黑一段时间。
+-- 方案 3 语义：黑名单内「正确密码照常放行」，黑名单只拦无凭证/错密请求。
+-- RT_BLACKLIST_ENABLED 设为 false 时整段功能关闭，行为退回纯双模式（向后兼容）。
+_M.blacklist_enabled = os.getenv("RT_BLACKLIST_ENABLED") or "true"
+_M.blacklist_threshold = tonumber(os.getenv("RT_BLACKLIST_THRESHOLD") or 5)
+local blacklist_ttl_hours = tonumber(os.getenv("RT_BLACKLIST_TTL_HOURS") or 24)
+_M.blacklist_ttl_seconds = blacklist_ttl_hours * 3600
+
 return _M

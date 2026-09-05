@@ -68,6 +68,31 @@
 1. **C 语言核心关卡早于 Lua 拦截**：OpenResty 的 Lua 代码是在 Nginx 的 HTTP 生命周期（如 `access_by_lua`、`content_by_lua`）中执行的。但在 HTTP/2 模块（`ngx_http_v2_module`）中，Nginx 在 C 语言解码 H2 帧（`HEADERS` frame）的阶段，一旦检测到 `:method = CONNECT`，由于它内部判定无法处理 H2 的多路复用隧道升级，会在 **C 核心层直接向客户端抛出 `RST_STREAM` 或返回 `405 Method Not Allowed`**。因此请求连 HTTP 处理阶段都没进入就被丢弃，Lua 引擎根本没有机会被唤醒。
 2. **H2 Stream 与 H1 Socket 的物理抽象差异**：即使 Nginx 允许 H2 `CONNECT` 通过，两者的协议降级也极度复杂。HTTP/1.1 `CONNECT` 是针对整条 TCP 双向 Socket 的状态切换（收到 200 后整条 TCP 变成纯文本管道）；而 HTTP/2 `CONNECT` 是交织在单条 TCP 连接内的二进制逻辑流（Stream）。要实现降级，Lua 必须截获二进制 Stream 帧，在本地发起 TCP `CONNECT` 建立管道，然后再用 Lua 协程在 H2 DATA 帧与该 Socket 间进行解包与双向 Pipe，这在性能与架构上都是不可取的。
 
+### ❓ 4. Chrome 使用 HTTPS 代理时，407 到底是不是必须的？插件能否在首包注入特殊标头？
+
+**短答案：** Chromium 网络栈 **支持** 跳过 407 的主动式认证；Chrome **不允许** 扩展把账密或自定义头写进首次 `CONNECT`。对 SwitchyOmega / ZeroOmega 来说，冷启动仍然必须 407。完整论证见 [安全加固文档 §三](./security_hardening.md)。
+
+分层说明：
+
+1. **引擎层（可以跳过 407）**  
+   `HttpAuthController::MaybeGenerateAuthToken()` / `SelectPreemptiveAuth()` 会在 `HttpAuthCache` 命中时，于 **第一个** `CONNECT` 就附带 `Proxy-Authorization`。这是 RFC 7617 预认证，不是 bug。curl / Clash / Xray 等独立栈更是默认首包带密。407 **不是** HTTPS 代理或 TLS 的协议前置条件。
+
+2. **Chrome 产品层（冷启动跳不过）**  
+   Chrome **不会使用** 嵌入在代理设置里的用户名密码（官方 `net/docs/proxy.md` 写明 *will not use any credentials embedded in the proxy settings*）。`--proxy-server=https://user:pass@host:443`、系统代理里的明文账密、`chrome.proxy` 配置，都不会让首包 CONNECT 带密。插件只能等 407 之后走 `webRequest.onAuthRequired`。同一次浏览器进程里认证成功后，cache 命中，后续 CONNECT 才会主动带密。
+
+3. **扩展 API 层（禁止改 CONNECT / 禁止写 Proxy-*）**  
+   * `chrome.proxy` 的 `ProxyServer` 只有 scheme / host / port，没有账密，没有自定义头。  
+   * `Proxy-Authorization` 以及所有 `Proxy-*` 都是 Forbidden request header；`webRequest` 默认不把它们交给扩展，DNR `modifyHeaders` 也不能设置它们。  
+   * 扩展事件绑定的是 **目标站 URL**，不是浏览器内部发往代理的 `CONNECT`。RestyTunnel 只在 CONNECT 上鉴权，成功后四层盲转，目标站上的 `X-*` 自定义头网关看不见。  
+   * MV3 普通扩展不再有 `webRequestBlocking`，更不可能在发送前同步改头。  
+   * Chrome 的「读取和更改网站数据」只是 `host_permissions`。ZeroOmega **已经**声明了 `<all_urls>`，再开一遍也不能给 CONNECT 加头；它最多影响目标站请求（而且 ZeroOmega 连这个开关都没做）。
+
+因此：**SwitchyOmega / ZeroOmega 不能在首次请求注入特殊标头来绕过 407，Chrome 也不允许这么做。** 已加白 IP 才回 407，是兼容浏览器插件的产品约束，不是 Chromium 引擎的物理定律；Clash 等主动带密的客户端不需要这条 407。
+
+若想「先认一个秘密头，再决定要不要回 407」：头必须加在 **CONNECT（外层）** 上，目标站看不见，也不会泄漏。加在「整个浏览器 / 特定网页」的请求上则会泄漏给被代理的网站，而且 RestyTunnel 在 CONNECT 阶段根本看不到。Chrome 插件只能改网页请求、改不了 CONNECT，所以这条门禁对 SwitchyOmega / ZeroOmega 无效。独立客户端把 `Proxy-Authorization` 当作那张头即可。
+
+Chrome **设置**和 **`chrome://flags` 也不能加自定义请求头**。DevTools / CDP 的 `setExtraHTTPHeaders` 只附加到当前页面的网页请求，不进 CONNECT，还会泄漏给目标站。详见 [安全加固文档 §3.4–3.5](./security_hardening.md)。
+
 ---
 
 ## 🔒 三、 完美的物理对抗安全形态

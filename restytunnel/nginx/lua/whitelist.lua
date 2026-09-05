@@ -163,7 +163,12 @@ function _M.add(ip_to_add)
     if dict then
         dict:set(ip_to_add, expiry_time, ttl_seconds)
     end
-    
+
+    -- 🟤 [B 兜底] 加白动作顺手清除该 IP 的黑名单记录与错密计数：
+    -- 用户在管理界面 TOTP 授权成功即视为可信身份，无需等待黑名单 24h 自然过期。
+    local blacklist = require("blacklist")
+    blacklist.clear(ip_to_add)
+
     -- 🎯 [安全与审计加固] 换成独立的 🔑 🔵 蓝色钥匙，与主连接的 🟢 绿色/黑名单的 🟤 褐色做出极为明显的视觉颜色和场景区分
     ngx.log(ngx.NOTICE, "🔑 🔵 [WHITELIST_ADDED] -> 成功向白名单中写入/更新受信任 IP: ", ip_to_add, "，授权有效生存时间 (TTL): ", ttl_seconds, " 秒。")
 

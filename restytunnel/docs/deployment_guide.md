@@ -69,7 +69,7 @@ javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFI
 2. **代理服务器 (Host)**：填写您的代理域名（如 `your-proxy-domain.com`）。
 3. **端口 (Port)**：`443`。
 4. 点击右侧的 **“锁”图标**，输入您的代理账号（`RT_PROXY_USERNAME`）和密码（`RT_PROXY_PASSWORD`）并保存。
-5. **开启白名单时的无感使用**：一旦您的 IP 已经在控制台加白，浏览器启动时就会在第一包请求中主动携带您的加密账密，一次性通过安全大闸，丝滑通网。
+5. **开启白名单时的无感使用（必须先加白）**：Chrome **不会**在冷启动的第一个 `CONNECT` 里主动带上锁图标里的账密，插件也 **不能** 给 CONNECT 注入 `Proxy-Authorization` 或自定义头（Chrome 把 `Proxy-*` 列为禁改标头，且扩展改不到 CONNECT 本身）。正确顺序是：先在授权域名完成加白 → 网关仅对已加白 IP 回一次 `407` → SwitchyOmega / ZeroOmega 的 `onAuthRequired` 自动填密并重发 → 同一次浏览器进程内的后续 CONNECT 才会走 Chromium 的预认证缓存、首包带密。未加白时网关绝不会回 407，以免把代理指纹暴露给扫描器。详见 [安全加固文档 §三](./security_hardening.md)。
 
 ### 2. Python 自研客户端开发 (以 `curl_cffi` 为例)
 在 Python 脚本中，普通的 `requests` 默认指纹过于单一。我们强烈推荐使用 **`curl_cffi`**，它在底层使用与 Chrome 一致的 TLS 指纹，同时完美支持 HTTPS 代理：
