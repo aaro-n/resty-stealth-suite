@@ -36,9 +36,15 @@ env RT_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS;
 env RT_TASK_CLEAN_LOG_RETAIN_LINES;
 env RT_WHITELIST_DB_PATH;
 env RT_REJECTED_LOG_PATH;
+env RT_BLACKLIST_ENABLED;
+env RT_BLACKLIST_THRESHOLD;
+env RT_BLACKLIST_TTL_HOURS;
 env RT_ENABLE_CUSTOM_MTLS;
 
 http {
+    # 🛡️ 隐藏版本指纹：错误页/响应头不再暴露 openresty/1.31.1.1
+    server_tokens off;
+    more_clear_headers Server;
     # 配置 Lua 模块寻找路径，支持模块化 Lua 开发
     lua_package_path "/app/nginx/lua/?.lua;/etc/nginx/lua/?.lua;;";
 
@@ -48,6 +54,9 @@ http {
 
     # 🟤 [错密黑名单] 共享内存字典：错密计数 + 拉黑标记，自带 TTL 自动过期，零磁盘 I/O。
     lua_shared_dict blacklist_dict 10m;
+
+    # 🔒 [白名单文件锁] 基于 resty.lock 的共享内存锁，替代 mkdir 目录锁，自动过期防永久死锁，无 fork 开销。
+    lua_shared_dict whitelist_lock 1m;
 
     # [自动维护机制] 每个 Worker 进程启动时，通过 Worker 0 初始化后台白名单定时清理
     init_worker_by_lua_block {
@@ -62,6 +71,8 @@ http {
 
     # [安全加固] 配置 IP 速率限制区域，用于白名单面板防暴力破解
     limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=${AUTH_RATE_LIMIT};
+    # 🛡️ 代理 CONNECT 并发上限：防单 IP 耗尽 worker_connections（超限返回 503，不暴露代理语义）
+    limit_conn_zone $binary_remote_addr zone=proxy_conn:10m;
 
     # 🎯 [安全与可观测性加固] 定义高级访问日志格式，在标准日志中追加打印 REAL_IP_HEADER、代理协议状态及真实访客公网 IP
     log_format main '$remote_addr - $remote_user [$time_local] "$request" '
@@ -149,6 +160,10 @@ http {
 
         # 🎯 [防探测加固] 拦截明文 HTTP 访问 HTTPS 端口产生的 497 错误，301 智能重定向到 HTTPS
         error_page 497 =301 https://$host$request_uri;
+        # 🛡️ 单 IP 并发隧道上限（与 limit_conn_zone 配合）
+        limit_conn proxy_conn 50;
+        limit_rate_after 100m;
+        limit_rate 0;
 
         # ==========================================
         # 模块化配置文件导入 (分工明确，专注单一功能)

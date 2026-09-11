@@ -32,10 +32,10 @@
 | :--- | :--- | :---: | :--- |
 | `RG_ENABLE_IP_WHITELIST`| `true` | 否 | **IP 白名单总开关**。设为 `true` 时，只有授权 IP 才能连接。设为 `false` 时，系统将转为纯粹的 SNI 代理，不进行任何 IP 限制。 |
 | `RG_WHITELIST_IP_TTL_SECONDS`| `86400` | 否 | **IP 白名单授权的有效期（秒）**。默认 `86400` 秒，即 24 小时。 |
-| `RG_NGINX_USERS` | (无) | 否 | **多用户及 TOTP 认证配置**。格式如 `user1:pass1:totp_secret,user2:pass2`。用于管理后台登录。 |
+| `RG_NGINX_USERS` | (无) | 否（但为空时控制台无法登录） | **多用户及 TOTP 认证配置**。格式为 `username:password_or_TOTP[:optional_totp_secret]`，逗号分隔，如 `admin:pass,bob:TOTP:JBSWY3DPEHPK3PXP`。`credential=TOTP` 且未带独立密钥时，回退使用 `RG_TOTP_SECRET`。 |
 | `RG_NGINX_SESSION_TTL_SECONDS`| `2592000` | 否 | **Web 控制台登录会话 Cookie 的有效期（秒）**。默认 `2592000` 秒，即 30 天。 |
 | `RG_TOTP_VALID_WINDOW_SECONDS`| `300` | 否 | **TOTP 容差校验时间窗口大小（秒）**。默认 300 秒，用于应对客户端与服务器的时间差。 |
-| `RG_TOTP_SECRET` | (无) | 否 | **单用户 TOTP 密钥**。当 `RG_NGINX_USERS` 中未给用户单独指定密钥时，可使用此全局密钥。**建议在 `RG_NGINX_USERS` 中为每个用户配置独立的密钥**。 |
+| `RG_TOTP_SECRET` | (无) | 否 | **全局 TOTP 兜底密钥**。当 `RG_NGINX_USERS` 中某用户 `credential=TOTP` 且未携带独立 `totp_secret` 时，使用此密钥校验。**建议在 `RG_NGINX_USERS` 中为每个用户配置独立的密钥**。 |
 | `RG_NGINX_CDN_IP_HEADERS`| `CF-Connecting-IP:cf,True-Client-IP:cf` | 否 | **边缘 CDN 的真实 IP 请求头优先级链**。格式为 `Header:Alias`，逗号分隔，用于穿透 CDN 获取访客真实 IP。 |
 
 ---
@@ -46,11 +46,11 @@
 | :--- | :--- | :---: | :--- |
 | `RG_TZ` | `Asia/Shanghai` | 否 | **容器运行时区**。用于确保日志和定时任务时间计算的准确性。 |
 | `RG_NGINX_LOG_LEVEL` | `notice` | 否 | **Nginx 核心错误日志级别**。可选值包括 `debug`, `info`, `notice`, `warn`, `error` 等。 |
-| `RG_SHOW_REJECTED_LOG`| `false` | 否 | **是否允许在管理后台查看被拦截的 IP 日志**。设为 `true` 时，可通过特定 URL 查看。 |
-| `RG_SHOW_WHITELIST_DB`| `false` | 否 | **是否允许在管理后台查看当前的白名单列表**。设为 `true` 时，可通过特定 URL 查看。 |
+| `RG_SHOW_REJECTED_LOG`| `false` | 否 | **是否暴露原始拦截日志文件端点**（`/<PREFIX>/<TOKEN>/<RG_NGINX_REJECT_LOG_FILENAME>`）。控制台内的拦截表格始终渲染，不受此开关控制。 |
+| `RG_SHOW_WHITELIST_DB`| `false` | 否 | **是否暴露原始白名单文件端点**（`/<PREFIX>/<TOKEN>/<RG_WHITELIST_DB_FILENAME>`）。控制台内的白名单表格始终渲染，不受此开关控制。 |
 | `RG_WHITELIST_DB_FILENAME`| `whitelist.db` | 否 | **在管理后台查看白名单时使用的文件名**。可用于混淆 URL。 |
 | `RG_NGINX_REJECT_LOG_FILENAME`| `rejected_ips.log`| 否 | **在管理后台查看拦截日志时使用的文件名**。可用于混淆 URL。 |
-| `RG_TASK_CLEAN_LOG_INTERVAL_SECONDS`| `60` | 否 | **后台拦截日志清理任务的运行周期（秒）**。 |
+| `RG_TASK_CLEAN_LOG_INTERVAL_SECONDS`| `60` | 否 | **后台拦截日志清理任务的运行周期（秒）**。注意 `docker-compose.yml` 示例为 600s，`README` 以 `bootstrap.sh` 默认 60s 为准。 |
 | `RG_TASK_CLEAN_LOG_RETAIN_LINES`| `10` | 否 | **清理后保留的最新拦截日志行数**。 |
 | `RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS`| `86400` | 否 | **后台白名单清理任务的运行周期（秒）**。 |
 

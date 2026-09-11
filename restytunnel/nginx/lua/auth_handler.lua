@@ -4,6 +4,8 @@
 local whitelist = require("whitelist")
 local view = require("auth_view")
 local config = require("config")
+local iputil = require("iputil")
+local session = require("session")
 
 local method = ngx.req.get_method()
 local headers = ngx.req.get_headers()
@@ -158,23 +160,23 @@ local function check_stealth_auth()
 
     if cookie_str ~= "" then
         local cookie_user = string.match(cookie_str, "gkp_user=([%w%.%_%-]+)")
-        local cookie_pass = string.match(cookie_str, "gkp_session=([%w]+)")
-        if cookie_user and cookie_pass then
-            local user_record = users_db[cookie_user]
-            local target_secret = user_record and (user_record.totp_secret or user_record.credential)
-            if target_secret and cookie_pass == target_secret then
-                local session_ttl = config.session_ttl_seconds or 2592000
+        local cookie_token = string.match(cookie_str, "gkp_session=([%d%.a-fA-F]+)")
+        if cookie_user and cookie_token and session.verify(cookie_user, cookie_token, users_db) then
+            local session_ttl = config.session_ttl_seconds or 2592000
+            -- 滑动续期：重新签发（旧 token 仍在有效期内可用，新 token 覆盖写回）
+            local new_token = session.issue(cookie_user, users_db[cookie_user], session_ttl)
+            if new_token then
                 ngx.header["Set-Cookie"] = {
                     "gkp_user=" .. cookie_user .. "; Path=/; Max-Age=" .. session_ttl .. "; HttpOnly; SameSite=Lax; Secure",
-                    "gkp_session=" .. target_secret .. "; Path=/; Max-Age=" .. session_ttl .. "; HttpOnly; SameSite=Lax; Secure",
+                    "gkp_session=" .. new_token .. "; Path=/; Max-Age=" .. session_ttl .. "; HttpOnly; SameSite=Lax; Secure",
                     "gkp_active=1; Path=/; Max-Age=" .. session_ttl .. "; SameSite=Lax; Secure"
                 }
-                ngx.header["Clear-Site-Data"] = '"storage"'
-
-                local client_real_ip = ngx.var.final_real_client_ip or ngx.var.remote_addr or "unknown"
-                ngx.log(ngx.NOTICE, "🔑 [认证通过] - 客户端 IP: '", client_real_ip, "', 用户: '", cookie_user, "', 认证方式: '免密 Cookie 锁顺延', 结果: 成功直接直入控制台。")
-                return true
             end
+            ngx.header["Clear-Site-Data"] = '"storage"'
+
+            local client_real_ip = ngx.var.remote_addr or "unknown"
+            ngx.log(ngx.NOTICE, "🔑 [认证通过] - 客户端 IP: '", client_real_ip, "', 用户: '", cookie_user, "', 认证方式: '签名 Cookie 会话', 结果: 成功直接直入控制台。")
+            return true
         end
     end
 
@@ -185,7 +187,7 @@ local function check_stealth_auth()
     local req_code = args.code
 
     if req_user or req_pass or req_code then
-        local client_real_ip = ngx.var.final_real_client_ip or ngx.var.remote_addr or "unknown"
+        local client_real_ip = ngx.var.remote_addr or "unknown"
         local user_show = req_user or "未知用户"
         local auth_type = (req_code and req_code ~= "") and "TOTP动态验证码" or ((req_pass and req_pass ~= "") and "静态密码" or "仅用户名")
         local attempt_val = (req_code and req_code ~= "") and req_code or ((req_pass and req_pass ~= "") and "******" or "-")
@@ -214,7 +216,13 @@ local function check_stealth_auth()
 
         if is_authenticated then
             local session_ttl = config.session_ttl_seconds or 2592000
-            
+            -- HMAC 签名会话：Cookie 中不再存放明文密码/TOTP 种子，仅存 exp.sig
+            local user_record_for_session = users_db[req_user]
+            local session_token = session.issue(req_user, user_record_for_session, session_ttl)
+            if not session_token then
+                ngx.log(ngx.ERR, "[auth] 会话签发失败，用户: ", req_user)
+                return false
+            end
             ngx.header["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             ngx.header["Pragma"] = "no-cache"
             ngx.header["Expires"] = "0"
@@ -222,7 +230,7 @@ local function check_stealth_auth()
 
             ngx.header["Set-Cookie"] = {
                 "gkp_user=" .. req_user .. "; Path=/; Max-Age=" .. session_ttl .. "; HttpOnly; SameSite=Lax; Secure",
-                "gkp_session=" .. cookie_secret .. "; Path=/; Max-Age=" .. session_ttl .. "; HttpOnly; SameSite=Lax; Secure",
+                "gkp_session=" .. session_token .. "; Path=/; Max-Age=" .. session_ttl .. "; HttpOnly; SameSite=Lax; Secure",
                 "gkp_active=1; Path=/; Max-Age=" .. session_ttl .. "; SameSite=Lax; Secure"
             }
             
@@ -263,16 +271,16 @@ local function check_stealth_auth()
 </body>
 </html>
 ]]
-            local client_real_ip = ngx.var.final_real_client_ip or ngx.var.remote_addr or "unknown"
+            local client_real_ip = ngx.var.remote_addr or "unknown"
             local auth_type = (req_code and req_code ~= "") and "TOTP动态验证码" or "静态密码"
-            ngx.log(ngx.NOTICE, "✅ [认证通过] - 客户端 IP: '", client_real_ip, "', 用户: '", req_user, "', 认证方式: '", auth_type, "', 结果: 成功生成新凭证，即将写入 Cookie 锁。")
+            ngx.log(ngx.NOTICE, "✅ [认证通过] - 客户端 IP: '", client_real_ip, "', 用户: '", req_user, "', 认证方式: '", auth_type, "', 结果: 成功签发签名会话 Cookie。")
 
             ngx.status = 200
             ngx.header["Content-Type"] = "text/html; charset=utf-8"
             ngx.say(jump_html)
             ngx.exit(200)
         else
-            local client_real_ip = ngx.var.final_real_client_ip or ngx.var.remote_addr or "unknown"
+            local client_real_ip = ngx.var.remote_addr or "unknown"
             local auth_type = (req_code and req_code ~= "") and "TOTP动态验证码" or "静态密码"
             local attempt_val = (req_code and req_code ~= "") and req_code or "******"
             ngx.log(ngx.WARN, "⚠️  [认证失败] - 客户端 IP: '", client_real_ip, "', 用户: '", req_user, "', 认证方式: '", auth_type, "', 提交的内容: '", attempt_val, "'。原因: 口令错误、超时或未对齐。")
@@ -296,24 +304,18 @@ end
 -- ========================================================
 -- 2. 解析客户端真实 IP 与要授权的 IP
 -- ========================================================
-local visitor_ip
-local cf_ip = headers["CF-Connecting-IP"]
-if cf_ip then
-    visitor_ip = cf_ip
-else
-    local xff = headers["X-Forwarded-For"]
-    if xff then
-        if type(xff) == "table" then xff = xff[1] end
-        visitor_ip = string.match(xff, "^%s*([^,]+)")
-    end
-end
-
-if not visitor_ip or visitor_ip == "" then
-    visitor_ip = ngx.var.remote_addr
-end
+-- 安全原则：Nginx real_ip 模块已在可信代理范围内还原 remote_addr；
+-- 此处绝不直接信任客户端可伪造的 CF-Connecting-IP / XFF 原始头（防任意加白）。
+-- 如需 CDN 场景，请经 RT_REAL_IP_FROM + RT_REAL_IP_HEADER 由 Nginx 层可信还原。
+local visitor_ip = ngx.var.remote_addr
 
 local ip_to_add = ngx.var.arg_ip
 if not ip_to_add or ip_to_add == "" then
+    ip_to_add = visitor_ip
+end
+-- ?ip= 显式参数必须为合法 IP，否则回退到本机连接 IP（防脏数据/注入）
+if not iputil.is_valid_ip(ip_to_add) then
+    ngx.log(ngx.WARN, "[auth] 非法 ip 参数已忽略: ", tostring(ngx.var.arg_ip))
     ip_to_add = visitor_ip
 end
 
@@ -329,12 +331,16 @@ if method == "POST" then
     if args then
         local action = args.action or "add"
         
-        -- A. 手动精准添加白名单 IP
+        -- A. 手动精准添加白名单 IP（仅允许为本连接 IP 加白：登录态只证明身份，不授予任意写 IP 权限）
         if action == "add" and args.ip then
             local submitted_ip = string.match(args.ip, "^%s*(.-)%s*$")
             if submitted_ip ~= "" then
-                ip_to_add = submitted_ip
-                success, err = whitelist.add(ip_to_add)
+                if submitted_ip ~= visitor_ip then
+                    success, err = false, "仅允许为当前连接 IP 加白"
+                else
+                    ip_to_add = submitted_ip
+                    success, err = whitelist.add(ip_to_add)
+                end
                 is_posted = true
             end
             

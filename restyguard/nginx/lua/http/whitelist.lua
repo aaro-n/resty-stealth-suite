@@ -8,12 +8,23 @@ local lock_dir_path = "/dev/shm/whitelist.lock"
 -- Nginx 多进程环境下，多个访客并发写入白名单或者后台过期清理任务并发触发时，
 -- 如果没有互斥锁保护，会导致白名单文件被写穿覆盖、产生随机 IP 丢失。
 -- 采用具有原子性的 `mkdir` 操作作为分布式互斥锁，确保独占访问。
+-- 注意：LuaJIT 下 os.execute 失败返回数字状态码（如 256），`if ok then` 恒为真，
+-- 必须显式判断 ==0 / ==true，否则互斥锁形同虚设。
+local function exec_ok(ok, _, code)
+    if ok == true then return true end
+    if ok == 0 then return true end
+    if code == 0 then return true end
+    if ok == nil then return false end
+    if type(ok) == "number" then return ok == 0 end
+    return false
+end
+
 local function acquire_lock()
     local max_attempts = 40
     local delay = 0.05 -- 50ms
     for i = 1, max_attempts do
-        local ok = os.execute("mkdir " .. lock_dir_path .. " 2>/dev/null")
-        if ok then
+        local ok, _, code = os.execute("mkdir " .. lock_dir_path .. " 2>/dev/null")
+        if exec_ok(ok, _, code) then
             return true
         end
         ngx.sleep(delay)
@@ -27,7 +38,13 @@ end
 
 function _M.add(ip_to_add)
     if not ip_to_add or ip_to_add == "" then return false, "IP to add cannot be empty" end
-    
+    -- 去除首尾空白，避免 " 1.2.3.4 " 与 "1.2.3.4" 被视为不同条目导致去重失效。
+    ip_to_add = string.match(ip_to_add, "^%s*(.-)%s*$")
+    -- 仅接受合法 IPv4 / IPv6（及可选端口/子网写法由调用方保证），拒绝换行注入与非法字符。
+    if not string.match(ip_to_add, "^[%w%.%:%/%[%]]+$") or string.find(ip_to_add, "\n") then
+        return false, "invalid IP format"
+    end
+
     -- 尝试获取互斥写锁
     if not acquire_lock() then
         ngx.log(ngx.ERR, "[http.whitelist] 无法获取文件写锁，写入超时被熔断: ", ip_to_add)
@@ -69,7 +86,7 @@ function _M.add(ip_to_add)
         
         -- 原子替换
         local rename_ok, _, rename_code = os.execute(string.format("mv %s %s", temp_path, whitelist_file_path))
-        if not rename_ok then
+        if not exec_ok(rename_ok, _, rename_code) then
             release_lock() -- 释放锁
             ngx.log(ngx.ERR, "[http.whitelist] failed to replace whitelist file, code: ", tostring(rename_code))
             return false, "failed to replace whitelist file"
@@ -99,6 +116,7 @@ end
 
 function _M.delete(ip_to_delete)
     if not ip_to_delete or ip_to_delete == "" then return false, "IP to delete cannot be empty" end
+    ip_to_delete = string.match(ip_to_delete, "^%s*(.-)%s*$")
 
     -- 尝试获取互斥写锁
     if not acquire_lock() then
@@ -129,7 +147,7 @@ function _M.delete(ip_to_delete)
         temp_file:close()
 
         local rename_ok, _, rename_code = os.execute(string.format("mv %s %s", temp_path, whitelist_file_path))
-        if not rename_ok then
+        if not exec_ok(rename_ok, _, rename_code) then
             release_lock()
             return false, "failed to replace whitelist file in delete"
         end

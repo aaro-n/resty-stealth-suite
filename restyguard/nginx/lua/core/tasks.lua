@@ -4,6 +4,7 @@ local io_open = io.open
 local ngx_log = ngx.log
 local ngx_INFO = ngx.INFO
 local ngx_ERR = ngx.ERR
+local ngx_NOTICE = ngx.NOTICE
 
 local _M = {}
 
@@ -12,14 +13,26 @@ local REJECTED_LOG_PATH = "/dev/shm/rejected_ips.log"
 local WHITELIST_DB_PATH = "/dev/shm/whitelist.db"
 local lock_dir_path = "/dev/shm/whitelist.lock"
 
+-- 判断 shell 命令是否执行成功，兼容 Lua 5.1（单数字返回值，0=成功）与 5.2+（true/nil+code）。
+-- 旧代码 `if not ok then` 在 LuaJIT 下恒为假（失败返回 256，非 nil），导致错误分支永不执行。
+local function exec_ok(ok, _, code)
+    if ok == true then return true end
+    if ok == 0 then return true end
+    if code == 0 then return true end
+    if ok == nil then return false end
+    -- Lua 5.1 下 ok 为数字状态码：0 成功，非 0 失败
+    if type(ok) == "number" then return ok == 0 end
+    return false
+end
+
 -- 🚀 [多 Worker 并发防覆盖调优]
 -- 采用原子目录操作实现互斥文件锁，确保清理过期 IP 与用户手动/自动添加 IP 时数据不冲突。
 local function acquire_lock()
     local max_attempts = 40
     local delay = 0.05 -- 50ms
     for i = 1, max_attempts do
-        local ok = os_execute("mkdir " .. lock_dir_path .. " 2>/dev/null")
-        if ok then
+        local ok, _, code = os_execute("mkdir " .. lock_dir_path .. " 2>/dev/null")
+        if exec_ok(ok, _, code) then
             return true
         end
         ngx.sleep(delay)
@@ -55,14 +68,16 @@ function _M.clean_rejected_log(retain_lines)
     REJECTED_LOG_PATH
     )
 
-    local clean_ok, _, clean_code = os_execute(clean_command)
+    local clean_ok, clean_reason, clean_code = os_execute(clean_command)
 
-    if not clean_ok then
-        if clean_code == 2 then
+    if not exec_ok(clean_ok, clean_reason, clean_code) then
+        local code = clean_code
+        if type(clean_ok) == "number" then code = clean_ok end
+        if code == 2 then
             -- 💡 [极致静音调优] 日志文件行数未达到保留阈值，或日志文件不存在，无需裁剪，也无需 reopen 重新加载 inode
             return
         else
-            ngx_log(ngx_ERR, string.format("[TASK] 日志清理 shell 命令执行失败。OK: %s, Code: %s", tostring(clean_ok), tostring(clean_code)))
+            ngx_log(ngx_ERR, string.format("[TASK] 日志清理 shell 命令执行失败。OK: %s, Code: %s", tostring(clean_ok), tostring(code)))
             return
         end
     end
@@ -73,17 +88,16 @@ function _M.clean_rejected_log(retain_lines)
     -- 这样 openresty -s reopen 就能找到正确的配置文件，并从中读取到正确的 pid 文件路径，
     -- 从而向正确的主进程发送信号。
     local reopen_command = "/usr/local/openresty/bin/openresty -c /etc/nginx/nginx.conf -s reopen"
-    
-    -- os.execute 返回 (true/nil, 'exit'/'signal', exit_code)
-    -- 我们需要检查命令是否成功执行并且退出码为 0
-    local reopen_ok, reason, code = os_execute(reopen_command)
-    
-    if reopen_ok and code == 0 then
+
+    -- os.execute 在 LuaJIT 下返回单数字状态码（0=成功），5.2+ 返回 (true/nil, reason, code)，统一用 exec_ok 判断。
+    local reopen_ok, reopen_reason, reopen_code = os_execute(reopen_command)
+
+    if exec_ok(reopen_ok, reopen_reason, reopen_code) then
         ngx_log(ngx_INFO, "[TASK] 已成功通知 Nginx 重新打开日志文件。")
     else
         -- 记录更详细的错误信息，便于调试
         ngx_log(ngx_ERR, string.format("[TASK] 通知 Nginx 重新打开日志文件失败。OK: %s, Reason: %s, Code: %s",
-            tostring(reopen_ok), tostring(reason), tostring(code)))
+            tostring(reopen_ok), tostring(reopen_reason), tostring(reopen_code)))
     end
     -- ^^^^^^^^^^ 【核心修正 v2.2.2】 ^^^^^^^^^^
 
@@ -148,14 +162,14 @@ function _M.clean_expired_whitelist_entries()
     temp_file:close()
 
     if has_content then
-        local ok, _, code = os_execute(string.format("mv %s %s", temp_path, WHITELIST_DB_PATH))
-        if ok then
+        local mv_ok, mv_reason, mv_code = os_execute(string.format("mv %s %s", temp_path, WHITELIST_DB_PATH))
+        if exec_ok(mv_ok, mv_reason, mv_code) then
             -- 🎯 [安全与审计加固] 模仿 RestyTunnel 日志颜色体系：使用 🧹 🟠 橙色扫帚与警告图标，与普通白色做出视觉上极明显的区分
             if expired_count > 0 then
                 ngx_log(ngx_NOTICE, "🧹 🟠 [WHITELIST_CLEANED] -> 自动清理过期白名单完成。物理移除了 ", expired_count, " 个过期 IP，保留活跃数: ", valid_count)
             end
         else
-            ngx_log(ngx_ERR, "[TASK] 白名单清理失败：无法用临时文件覆盖原始文件。返回码: ", code)
+            ngx_log(ngx_ERR, "[TASK] 白名单清理失败：无法用临时文件覆盖原始文件。返回码: ", tostring(mv_code))
         end
     else
         os_execute(string.format("rm -f %s", temp_path))

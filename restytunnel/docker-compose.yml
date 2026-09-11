@@ -5,6 +5,21 @@ services:
     build: .
     container_name: restytunnel-proxy
     restart: always
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-k", "-s", "-o", "/dev/null", "--resolve", "agent.yourdomain.com:443:127.0.0.1", "https://agent.yourdomain.com/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     ports:
       - "443:443"  # 标准 HTTPS 代理与双域名、HTTP/3 QUIC (UDP 443) 共用
       - "443:443/udp"
@@ -20,9 +35,12 @@ services:
       - AUTH_DOMAIN=auth.yourdomain.com        # 您的第二白名单授权管理域名 (在 Cloudflare 开启 CDN 代理保护)
       - AUTH_PATH_PREFIX=auth                  # 随机子路径前缀 (双重防刺探防线之一)
       - SECRET_TOKEN=mysecrettoken123          # 安全网页随机密令 (双重防刺探防线之二)
-      - WHITELIST_IP_TTL_DAYS=7                # 白名单单次授权持续天数 (默认 7 天)
+      - WHITELIST_IP_TTL_DAYS=7                # 白名单单次授权持续天数 (默认 7 天；另可用 WHITELIST_IP_TTL_SECONDS 直接指定秒数)
       - WHITELIST_DB_PATH=/dev/shm/whitelist.db  # 🎯 白名单物理文件路径控制 (默认基于 RAM 内存的高速物理盘)
       - REJECTED_LOG_PATH=/dev/shm/rejected_ips.log  # 🎯 探测拦截记录物理文件路径控制 (默认基于 RAM 内存盘)
+      - RT_BLACKLIST_ENABLED=true              # 🟤 错密黑名单总开关 (false = 关闭计数拉黑，退回纯双模式；兼容无前缀 BLACKLIST_*)
+      - RT_BLACKLIST_THRESHOLD=5               # 🟤 同一源 IP 累计错密达此次数即拉黑
+      - RT_BLACKLIST_TTL_HOURS=24              # 🟤 黑名单有效期 (小时)，到期自动解除；管理界面加白可立即清除
 
       # === 3. 高级调优开关 ===
       - NGINX_PORT=443                         # 容器运行监听端口 (默认 443，Fly.io 部署建议变更为 10443)
@@ -31,6 +49,7 @@ services:
       - AUTH_FALLBACK_BACKEND=https://cn.bing.com   # 🎯 验证域名专属回落后端 (不设则默认继承 FALLBACK_BACKEND)
       - TZ=Asia/Shanghai                       # 🎯 默认时区设为北京时间，解决日志时序混乱
       - TASK_CLEAN_WHITELIST_INTERVAL_SECONDS=3600 # 后台自动白名单过期扫描周期 (默认每 1 小时自动维护清理)
+      - TASK_CLEAN_LOG_INTERVAL_SECONDS=60     # 后台自动裁剪拦截日志周期 (默认每 1 分钟)
       - TASK_CLEAN_LOG_RETAIN_LINES=30         # 被拒阻断日志流式精准截断最大行数 (物理抛弃旧拦截)
       - ENABLE_VIEW_WHITELIST=true             # 安全可见性：是否允许在网页中查看白名单列表 (默认 true)
       - ENABLE_VIEW_BLACKLIST=true             # 安全可见性：是否允许在网页中查看被拒拦截日志 (默认 true)

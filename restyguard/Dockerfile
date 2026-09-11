@@ -1,8 +1,8 @@
 # 使用本地缓存中已存在的 OpenResty 1.31 Alpine 镜像作为基础镜像
 FROM openresty/openresty:1.31-alpine
 
-# 安装 gettext(用于envsubst), procps/util-linux(用于unshare), openssl(用于自签名保底证书)
-RUN apk add --no-cache gettext procps util-linux openssl
+# 安装 gettext(用于envsubst), procps/util-linux(用于unshare), openssl(用于自签名保底证书), tzdata(用于 RG_TZ 时区)
+RUN apk add --no-cache gettext procps util-linux openssl tzdata
 
 # 将项目所有文件复制到容器的 /app 目录
 COPY . /app

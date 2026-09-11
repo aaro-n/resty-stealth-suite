@@ -71,12 +71,12 @@ function _M.start()
     ngx_log(ngx_INFO, "[SCHEDULER] 正在初始化所有定时任务...")
 
     -- 1. 日志清理任务
-    local log_interval = os.getenv("RG_TASK_CLEAN_LOG_INTERVAL_SECONDS")
+    local log_interval = tonumber(os.getenv("RG_TASK_CLEAN_LOG_INTERVAL_SECONDS"))
     local log_retain_lines = os.getenv("RG_TASK_CLEAN_LOG_RETAIN_LINES")
     schedule_recurring_task(log_interval, tasks.clean_rejected_log, "日志清理", log_retain_lines)
 
     -- 2. 白名单清理任务
-    local whitelist_interval = os.getenv("TASK_CLEAN_WHITELIST_INTERVAL_SECONDS")
+    local whitelist_interval = tonumber(os.getenv("RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS"))
     schedule_recurring_task(whitelist_interval, tasks.clean_expired_whitelist_entries, "白名单清理")
     
 end

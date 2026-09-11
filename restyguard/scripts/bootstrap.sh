@@ -437,7 +437,10 @@ EOF
         fi
         
         if [ "$RG_NGINX_TLS_MODE" = "http" ]; then
-            echo "    listen 127.0.0.1:8443;"
+            # http 调试模式：18443 环回网关恒定向前转发 PROXY Protocol 头，此处必须同步接收，否则管理链路协议错位中断。
+            echo "    listen 127.0.0.1:8443 proxy_protocol;"
+            echo "    real_ip_header proxy_protocol;"
+            echo "    set_real_ip_from 127.0.0.1;"
         else
             echo "    listen 127.0.0.1:8443 ssl proxy_protocol;"
             envsubst '${RG_SSL_CERT_PATH} ${RG_SSL_KEY_PATH}' < "${TEMPLATE_DIR}/ssl.conf.template"
@@ -524,8 +527,8 @@ EOF
         echo "                end"
         echo "                "
         echo "                if cookie_str ~= \"\" then"
-        echo "                    local cookie_user = string.match(cookie_str, \"gkp_user=([%w%.%_%-]+)\")"
-        echo "                    local cookie_pass = string.match(cookie_str, \"gkp_session=([%w]+)\")"
+        echo "                    local cookie_user = string.match(cookie_str, \"gkp_user=([^;%s]+)\")"
+        echo "                    local cookie_pass = string.match(cookie_str, \"gkp_session=([^;%s]+)\")"
         echo "                    if cookie_user and cookie_pass then"
         echo "                        local raw_users = os.getenv(\"RG_NGINX_USERS\")"
         echo "                        if raw_users and raw_users ~= \"\" then"
@@ -551,7 +554,7 @@ EOF
         echo "                return false"
         echo "            end"
         echo "            if not check_allowed() then"
-        echo "                ngx.exec(\"@backend\")"
+        echo "                ngx.exec(\"@fallback\")"
         echo "                return"
         echo "            end"
         echo "        }"
@@ -583,7 +586,7 @@ EOF
         echo "                return false"
         echo "            end"
         echo "            if not check_allowed() then"
-        echo "                ngx.exec(\"@backend\")"
+        echo "                ngx.exec(\"@fallback\")"
         echo "                return"
         echo "            end"
         echo "        }"
@@ -615,7 +618,7 @@ EOF
         echo "                return false"
         echo "            end"
         echo "            if not check_allowed() then"
-        echo "                ngx.exec(\"@backend\")"
+        echo "                ngx.exec(\"@fallback\")"
         echo "                return"
         echo "            end"
         echo "        }"

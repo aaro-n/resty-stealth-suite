@@ -78,10 +78,13 @@ _M.rejected_log_path = os.getenv("RT_REJECTED_LOG_PATH") or os.getenv("REJECTED_
 
 -- 8. 🟤 [错密黑名单] 防爆破减速带：仅对「带凭证但密码错误」的请求计数，达阈值拉黑一段时间。
 -- 方案 3 语义：黑名单内「正确密码照常放行」，黑名单只拦无凭证/错密请求。
--- RT_BLACKLIST_ENABLED 设为 false 时整段功能关闭，行为退回纯双模式（向后兼容）。
-_M.blacklist_enabled = os.getenv("RT_BLACKLIST_ENABLED") or "true"
-_M.blacklist_threshold = tonumber(os.getenv("RT_BLACKLIST_THRESHOLD") or 5)
-local blacklist_ttl_hours = tonumber(os.getenv("RT_BLACKLIST_TTL_HOURS") or 24)
+-- RT_BLACKLIST_ENABLED 设为 false 时整段功能关闭，行为退回纯双模式（向后兼容，兼容无前缀旧别名）。
+_M.blacklist_enabled = os.getenv("RT_BLACKLIST_ENABLED") or os.getenv("BLACKLIST_ENABLED") or "true"
+_M.blacklist_threshold = tonumber(os.getenv("RT_BLACKLIST_THRESHOLD") or os.getenv("BLACKLIST_THRESHOLD") or 5)
+local blacklist_ttl_hours = tonumber(os.getenv("RT_BLACKLIST_TTL_HOURS") or os.getenv("BLACKLIST_TTL_HOURS") or 24)
 _M.blacklist_ttl_seconds = blacklist_ttl_hours * 3600
+
+-- 9. 后台拦截日志裁剪周期（集中配置，避免 scheduler 绕过 config 直读 env）
+_M.log_clean_interval = parse_time_to_seconds(os.getenv("RT_TASK_CLEAN_LOG_INTERVAL_SECONDS") or os.getenv("TASK_CLEAN_LOG_INTERVAL_SECONDS"), 60)
 
 return _M

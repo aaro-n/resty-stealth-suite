@@ -8,7 +8,7 @@
 
 ### 1. 前提条件
 * 准备一台便宜的海外 VPS（推荐使用 Debian 11/12 或 Ubuntu 20.04/22.04/24.04 系统）。
-* 一个解析到该服务器公网 IP 的合法域名（若启用 ACME 自动管理）。
+* 一个解析到该服务器公网 IP 的合法域名（证书由 `bootstrap.sh` 自动处理：优先 Base64 注入 `RT_SSL_CERT_BASE64`/`RT_SSL_KEY_BASE64`，其次卷挂载 `ssl/cert.pem`/`ssl/key.pem`（路径可经 `RT_SSL_CERT_PATH`/`RT_SSL_KEY_PATH` 自定义），均无则自动生成自签名保底；`openresty:1.31-alpine` 未编译 `ngx_http_acme_module`，不支持 `acme_issuer` 自动签发）。
 * 安装好 Docker 和 Docker Compose。
 
 ### 2. 部署 RestyTunnel 容器
@@ -38,12 +38,6 @@ javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFI
 
 ---
 
-## 💻 三、 客户端配置与指纹整形
-
-由于防御指纹探测的一半战场在客户端（应用端），**任何原生的、僵硬的 TLS 握手特征（如 Python requests 默认指纹、Go 原生 http 库等）在公网上发送 `CONNECT` 请求，都极易被直接识别。** 我们必须对客户端实施 TLS 指纹整形。
-
----
-
 ## 🔬 三、 核心技术澄清：代理协议与安全性能
 
 在 RestyTunnel 架构中，关于协议的划分和数据传输安全，有一些极其关键的技术细节需要向您理清：
@@ -69,7 +63,7 @@ javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFI
 2. **代理服务器 (Host)**：填写您的代理域名（如 `your-proxy-domain.com`）。
 3. **端口 (Port)**：`443`。
 4. 点击右侧的 **“锁”图标**，输入您的代理账号（`RT_PROXY_USERNAME`）和密码（`RT_PROXY_PASSWORD`）并保存。
-5. **开启白名单时的无感使用（必须先加白）**：Chrome **不会**在冷启动的第一个 `CONNECT` 里主动带上锁图标里的账密，插件也 **不能** 给 CONNECT 注入 `Proxy-Authorization` 或自定义头（Chrome 把 `Proxy-*` 列为禁改标头，且扩展改不到 CONNECT 本身）。正确顺序是：先在授权域名完成加白 → 网关仅对已加白 IP 回一次 `407` → SwitchyOmega / ZeroOmega 的 `onAuthRequired` 自动填密并重发 → 同一次浏览器进程内的后续 CONNECT 才会走 Chromium 的预认证缓存、首包带密。未加白时网关绝不会回 407，以免把代理指纹暴露给扫描器。详见 [安全加固文档 §三](./security_hardening.md)。
+5. **开启白名单时的无感使用（必须先加白）**：Chrome **不会**在冷启动的第一个 `CONNECT` 里主动带上锁图标里的账密，插件也 **不能** 给 CONNECT 注入 `Proxy-Authorization` 或自定义头（Chrome 把 `Proxy-*` 列为禁改标头，且扩展改不到 CONNECT 本身）。正确顺序是：先在授权域名完成加白 → 网关仅对已加白 IP 回一次 `407` → SwitchyOmega / ZeroOmega 的 `onAuthRequired` 自动填密并重发 → 同一次浏览器进程内的后续 CONNECT 才会走 Chromium 的预认证缓存、首包带密（此后换网络不断会话即可零漫游）。未加白时网关绝不会回 407，以免把代理指纹暴露给扫描器。详见 [安全加固文档 §三](./security_hardening.md)。
 
 ### 2. Python 自研客户端开发 (以 `curl_cffi` 为例)
 在 Python 脚本中，普通的 `requests` 默认指纹过于单一。我们强烈推荐使用 **`curl_cffi`**，它在底层使用与 Chrome 一致的 TLS 指纹，同时完美支持 HTTPS 代理：
@@ -139,7 +133,7 @@ func main() {
 
 ---
 
-## 🕵️ 四、 核心追问：客户端会指定 HTTP/1.1 访问这个代理吗？
+## 🕵️ 五、 核心追问：客户端会指定 HTTP/1.1 访问这个代理吗？
 
 这是一个极其专业、直戳网络工程命门的核心技术追问。
 答案是：**是的，非常高频！大量落后、未经过深度优化、或操作系统默认的代理客户端，在公网上发起 HTTPS 代理请求时，会默认指定并使用 HTTP/1.1！**
@@ -158,36 +152,31 @@ func main() {
 2. **队头阻塞与频繁握手：** Chrome 打开一个网页需要并发向几十个不同 IP 获取图片/脚本。如果你用 1.1，客户端必须向你的代理服务器并发进行几十次独立的 TCP+TLS 握手，每次连接里都发一次 1.1 `CONNECT`。这在网络审计的统计学监测和行为打标里，极易暴露明显的代理特征。
 
 ### 3. RestyTunnel 是如何终极解决这个问题的？
-在 RestyTunnel 中，我们利用 `FORCE_MODERN_PROTO`（默认为 `proxy` 模式）在服务端筑起了降维反探测防线：
-* **如果未优化的落后客户端使用 HTTP/1.1 试图强连代理：**
-  由于它使用的是 1.1 协议，这直接触发了我们的 Lua 拦截哨卡。Lua 判定其协议安全强度不足以抵抗现代 DPI 的流量分析和时序检测，**直接在内存里抹掉其代理意图，强行重定向重写为 GET `/index.html`**，把它甩到静态站点页面（返回 200 OK 静态源码）。
-  * 结果：这个使用 1.1 协议的代理客户端将完全无法连接，它在接收端看到的将是你的静态站点 HTML。这既保护了你的服务器免受非标 1.1 代理流量的行为学连累，又实现了 100% 的反探测洗白。
-* **我们如何强迫客户端在公网走 H2/H3？**
-  我们必须对客户端的底层网络引擎进行协议强制协商，使它们在公网上发起连接时**必须、且首选 H2 或 H3**：
+在 RestyTunnel 中，代理域名在公网只接受 **TLS 1.3 + HTTP/1.1** 的标准 CONNECT 隧道（`http2 off; http3 off;`，见 `nginx.conf.template` 代理 server 块）。这是由 Nginx 1.31 原生 `tunnel_pass` 只认识 HTTP/1.1 文本 CONNECT 决定的：若客户端协商 H2/H3 并发送 H2 CONNECT 帧，原生内核无法解析，会直接报错断开。
+* **客户端侧**：Chrome + SwitchyOmega 选择 `HTTPS` 协议后，会在 TLS 握手后发送标准的 HTTP/1.1 `CONNECT`（包裹在 TLS 1.3 加密隧道内，公网不可见）；`curl_cffi`（`browser="chrome"`）与 Go（`NextProtos` 含 `http/1.1`）同理。TLS 1.3 内部跑 HTTP/1.1 是全球 40%+ 正常流量（企业 API、WebSocket 长连接）的标准形态，无特征可言。
+* **服务端侧**：Lua 在 CONNECT 建连的第一微秒做一次鉴权（正确密码直接放行建隧道 / 无凭证已加白回 407 / 其余静默回落伪装），成功后控制权移交 C 内核 `tunnel_pass` 盲转，后续流量零 Lua 介入。
 
 ---
 
-## 💻 五、 强制客户端强开 H2/H3 代理配置与验证
+## 💻 六、 客户端 TLS 1.3 + HTTP/1.1 标准接入与验证
 
 ### 1. 桌面端浏览器（Chrome / SwitchyOmega）原生形态
-现代 Chrome 浏览器原生内置了对 **HTTP/2 HTTPS 代理** 的顶级支持！只要通过 SwitchyOmega 插件进行正确配置，Chrome 会自动在公网发起完美的 HTTP/2 代理连接：
+现代 Chrome 浏览器原生支持 HTTPS 代理。只要通过 SwitchyOmega 插件进行正确配置，Chrome 会在 TLS 1.3 加密隧道内发送标准的 HTTP/1.1 `CONNECT`（与 `nginx.conf.template` 代理 server 块的 `http2 off; http3 off;` 完全兼容）：
 
 1. 在 Chrome 浏览器安装 **Proxy SwitchyOmega** 插件。
 2. 新建情景模式（类型：代理服务器），命名为 `RestyTunnel`。
 3. **关键配置：**
-   * **代理协议：** 必须且只能选择 **`HTTPS`** (⚠️ 绝对不能选择 HTTP)。选择 HTTPS 后，Chrome 在 TLS 握手 ALPN 中会强制向服务器索要 `h2`。
+   * **代理协议：** 必须且只能选择 **`HTTPS`** (⚠️ 绝对不能选择 HTTP)。选择 HTTPS 后，Chrome 会与服务器建立 TLS 1.3 加密隧道，并在隧道内发送 HTTP/1.1 `CONNECT`。
    * **代理服务器：** 填写你的解析域名（如 `your-proxy-domain.com`）。
    * **端口：** `443`
 4. 点击右侧的 **“锁”图标（授权认证）**，输入账号密码。
-5. **在 Chrome 中实时验证公网协议版本：**
-   * 在 Chrome 地址栏输入并打开：`chrome://net-internals/#http2`
-   * 在列表中寻找你的代理域名（如 `your-proxy-domain.com`）。
-   * 你会清爽地看到：它的 **Protocol** 字段显示为 **`h2`**，并且所有去往外网的请求都复用在这一条 H2 连接下的不同 Stream ID 中。
-   * 如果开启了 HTTP/3 (QUIC) 且网络无 QoS 阻断，你可以通过 `chrome://net-internals/#quic` 验证其运行在 **`h3`** (QUIC) 之下。
+5. **验证隧道是否建立：**
+   * 打开任意网页，能正常加载即表示 CONNECT 隧道已建立（网关日志可见 `🟢 [PASS] [PROXY_GRANTED]`）。
+   * 若浏览器冷启动后打不开网页：先确认当前 IP 已在授权域名完成加白（网关仅对已加白 IP 回 407 触发插件自动填密）。
 
-### 2. Python 专属客户端开发：利用 `curl_cffi` 强制协商 H2
-在 Python 脚本中，普通的 `requests` 或 `urllib3` 会默认退回传统的 HTTP/1.1。
-我们必须使用 **`curl_cffi`**，它不仅会复制 Chrome 120+ 的 JA3/JA4 握手指纹，还会在底层自动通过 ALPN 强制与服务器建立 **HTTP/2** 盲加密多路复用隧道：
+### 2. Python 专属客户端开发：利用 `curl_cffi` 复制 Chrome 指纹
+在 Python 脚本中，普通的 `requests` 或 `urllib3` 指纹过于单一，容易被识别。
+我们必须使用 **`curl_cffi`**，它在底层通过 C 绑定的 NSS/Nettle 库，完美复制 Chrome 120+ 的 TLS 握手指纹（`browser="chrome"`），并在 TLS 1.3 隧道内发送标准 HTTP/1.1 `CONNECT`：
 
 ```python
 # File: client.py
@@ -202,9 +191,9 @@ proxies = {
 }
 
 try:
-    print("正在通过 H2/H3 混合自适应加密隧道进行网络传输...")
+    print("正在通过 TLS 1.3 盲加密隧道进行网络传输...")
     # 🎯 browser="chrome" 是防御指纹扫描的生死线！
-    # 它在底层通过 C 绑定的 NSS/Nettle 库，完美复制了 Chrome 120+ 的 TLS 指纹并强制启用 HTTP/2
+    # 它在底层通过 C 绑定的 NSS/Nettle 库，完美复制了 Chrome 120+ 的 TLS 指纹
     response = requests.get(
         "https://www.google.com", 
         proxies=proxies, 
@@ -219,8 +208,8 @@ except Exception as e:
     print(f" [失败] 连接被阻断或鉴权错误: {e}")
 ```
 
-### 3. Go 语言自研客户端：引入 `NextProtos` 强开 H2 协商
-在使用 Go 自研代理工具时，必须在 TLS 配置的 ALPN 参数中明确写入 `"h2"`，否则 Go 默认会使用 HTTP/1.1 发送 `CONNECT`：
+### 3. Go 语言自研客户端：标准库直连即可
+在使用 Go 自研代理工具时，标准库的 `Transport.Proxy` 会在 TLS 1.3 隧道内发送标准 HTTP/1.1 `CONNECT`，与网关原生兼容，无需特殊 ALPN 配置：
 
 ```go
 package main
@@ -234,28 +223,22 @@ import (
 
 func main() {
 	proxyUrl, _ := url.Parse("https://myuser:mypassword@your-proxy-domain.com:443")
-	
-	// 🎯 极限防探测：必须显式地在 ALPN 中加入 "h2"，强迫客户端与 Nginx 进行 HTTP/2 握手
-	config := &tls.Config{
-		NextProtos: []string{"h2", "http/1.1"}, // 优先强制协商 HTTP/2
-	}
-	
 	transport := &http.Transport{
-		Proxy:           http.ProxyURL(proxyUrl),
-		TLSClientConfig: config,
+		Proxy: http.ProxyURL(proxyUrl),
+		TLSClientConfig: &tls.Config{ MinVersion: tls.VersionTLS13 },
 	}
 	client := &http.Client{ Transport: transport }
-
 	resp, err := client.Get("https://www.wikipedia.org")
 	if err == nil {
 		fmt.Println("连接维基百科成功，状态码:", resp.Status)
+		resp.Body.Close()
 	}
 }
 ```
 
 ---
 
-## ⚙️ 六、 容器维护与管理
+## ⚙️ 七、 容器维护与管理
 
 ### 1. 查看容器日志与运行状态
 你可以实时观察 Nginx 1.31 核心状态行为：
@@ -265,20 +248,20 @@ docker logs -f restytunnel-proxy
 
 ### 2. 手动替换证书
 如果你不想启用自签名开发证书，想手动使用自己申请的受信任正规证书：
-1. 确保 `docker-compose.yml` 中的 `ENABLE_ACME` 设为 `false`。
-2. 将你申请到的证书公钥命名为 `fullchain.pem`，私钥命名为 `privkey.pem`。
-3. 拷贝并覆写到项目本地的 `./ssl/` 目录下：
+1. 将你申请到的证书公钥命名为 `cert.pem`，私钥命名为 `key.pem`（或通过 `RT_SSL_CERT_PATH` / `RT_SSL_KEY_PATH` 自定义路径）。
+2. 拷贝并覆写到项目本地的 `./ssl/` 目录下：
    ```bash
-   cp my_cert.crt ./ssl/fullchain.pem
-   cp my_key.key ./ssl/privkey.pem
+   cp my_cert.crt ./ssl/cert.pem
+   cp my_key.key ./ssl/key.pem
    ```
-4. 手动平滑重载 Nginx 容器（或者容器内的 Nginx 进程执行 `openresty -s reload`）：
+3. 手动平滑重载 Nginx 容器（或者容器内的 Nginx 进程执行 `openresty -s reload`）：
    ```bash
    docker-compose restart restytunnel
    ```
+   > 证书加载优先级：`RT_SSL_CERT_BASE64`/`RT_SSL_KEY_BASE64`（容器启动时解码写入）> 卷挂载 `ssl/` > 自签名保底；`bootstrap.sh` 会在启动时自动处理。
 
 ### 3. 自定义替换你的伪装博客网页
 我们随项目赠送了一个高可信度的技术博客前端单页。如果你想让它更有生活气息：
 1. 用任何静态 HTML 模板框架（如 Hexo, Hugo）生成一个饱满的、多图片、多子页面的静态个人主页。
 2. 将生成出的静态网页所有内容放入项目本地的 `./html/` 文件夹下。
-3. 容器检测到挂载变更后，无需重启，任何上门探测的盲扫流量在第一微秒就会由原生 `rewrite` 自动呈现全新的伪装网页。
+3. 容器启动时 `Dockerfile` 会将 `html/` 复制到 `/var/www/html`；后续更新需重新构建镜像或挂载覆盖，伪装后端本身由 `FALLBACK_BACKEND`（`backend.conf` 反代）提供，静态 `html/` 仅为本地备用。

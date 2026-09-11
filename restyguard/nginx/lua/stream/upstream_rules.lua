@@ -112,9 +112,11 @@ local function parse_env_rules(env_str, is_new_format)
     end
 end
 
--- 执行环境变量合并（环境变量优先级高，支持临时覆盖静态文件规则）
-parse_env_rules(os.getenv("RG_STREAM_UPSTREAM_RULES"), true)
+-- 执行环境变量合并（环境变量优先级高，支持临时覆盖静态文件规则）。
+-- 注意顺序：旧版 MAP 先解析，新版 RULES 后解析，后者覆盖前者，
+-- 与文档“RG_STREAM_UPSTREAM_RULES 优先级高于 RG_STREAM_UPSTREAM_MAP”一致。
 parse_env_rules(os.getenv("RG_STREAM_UPSTREAM_MAP"), false)
+parse_env_rules(os.getenv("RG_STREAM_UPSTREAM_RULES"), true)
 
 function _M.get_route(sni)
     if not sni or sni == "" then return nil end
@@ -140,8 +142,12 @@ function _M.get_default()
 end
 
 -- 导出路由匹配表（调试用）
+-- DYNAMIC 泛路由开启时，任何 SNI 均视为已绑定，避免误报 Forbidden Unbound。
 function _M.is_bound(sni)
     if not sni or sni == "" then return false end
+    if default_upstream == "DYNAMIC" then
+        return true
+    end
     if rules[sni] ~= nil then
         return true
     end

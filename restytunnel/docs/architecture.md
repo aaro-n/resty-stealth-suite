@@ -16,18 +16,20 @@ RestyTunnel 摒弃了传统的反向代理数据搬运模型，转而使用“�
 │                    服务器内部 (OpenResty 1.31+)                        │
 │                                                                       │
 │  ▶ 1. 外部大门 (443 SSL 端口)                                         │
-│     │  ├─ 建立标准的 SSL 会话 (支持 TLS 1.2 / TLS 1.3)                 │
+│     │  ├─ 建立标准的 SSL 会话 (TLS 1.3，代理域强制 HTTP/1.1)          │
 │     │  └─ Lua 介入 (access_by_lua_block)：                             │
-│     │     提取 Proxy-Authorization 凭证，判断密码：                   │
-│     │       - 密码正确 ➔ 直接 exec 暗道 (@native_tunnel)               │
-│     │       - 密码错误/无密 ➔ 啥也不管，直接放行看博客                 │
+│     │     双模式鉴权 + 错密黑名单：                                    │
+│     │       - 带正确凭证 ➔ 直接 exec 暗道 (@native_tunnel，不看白名单) │
+│     │       - 带错凭证 ➔ 计数，达阈值拉黑 + 反代伪装后端               │
+│     │       - 无凭证 + 已加白 ➔ 回 407（浏览器插件填密用）             │
+│     │       - 无凭证 + 未加白/黑名单内 ➔ 静默反代伪装后端              │
 │     │                                                                 │
 │     ├─────────────────────────── 协议转换 ────────────────────────────┤
 │     ▼ (解密并转换后的 HTTP/1.1 CONNECT 指令)                          │
 │  ▶ 2. 隐藏位置 (@native_tunnel 路由)                                  │
 │     │                                                                 │
 │     ▼ (移交给 1.31 原生 C 语言盲转内核)                                │
-│  ▶ 3. 1.31 核心 (tunnel_pass $host)                                   │
+│  ▶ 3. 1.31 核心 (tunnel_pass)                                   │
 │        ├─ 彻底关闭 Nginx 内部的七层 HTTP 状态机与协议解析引擎         │
 │        └─ 退化为“瞎眼”的纯四层异步事件转发器                         │
 │           直接通过 Linux 内核极速的 epoll 完成下游与目标站的双向透传  │
@@ -44,11 +46,10 @@ RestyTunnel 摒弃了传统的反向代理数据搬运模型，转而使用“�
 * **控制面（第一毫秒）：** 流量进来，Lua 模块只执行一次账密比对。由于只在连接刚建立时执行一次，CPU 损耗几乎为 0。
 * **数据面（后续大流量）：** 验证成功并完成协议降维后，控制权立刻移交给 Nginx 1.31 原生的 C 语言内核 `tunnel_pass`。数据搬运完全在 Linux 底层的 Socket 缓冲区完成（内存零拷贝），网络时延和系统开销直接达到裸跑四层 TCP 转发的物理极限。
 
-### 2. 双向 UDS（Unix Domain Socket）共享内存零拷贝接驳
-在配置后端 V2Ray/Xray 代理时，传统的反代采用 TCP 本地环回端口（`127.0.0.1:10086`）。
-RestyTunnel 采用了基于 **共享内存盘 `/dev/shm`** 的 UDS 技术（`unix:/dev/shm/v2ray.sock`）：
-* 彻底跳过了 Linux 本地环回网络协议栈（免去 TCP 握手、IP 包头组装、内核路由表查询及本地防火墙拦截），通信效率比 127.0.0.1 提升 **10% 以上**。
-* 彻底关闭了本地 TCP 监听端口，在系统级别使代理软件对于外部端口扫描和本地进程监控（如企业内网探针）完全隐形。
+### 2. 后端接驳：伪装后端反代（`@backend`）
+网关鉴权未通过的流量（错密 / 未加白 / 黑名单内无凭证 / 普通访客）经 `ngx.exec("@backend")` 反代至伪装后端（`nginx/conf.d/backend.conf`，`proxy_pass $fallback_backend`，按代理域/授权域隔离 `Host` 与 `SNI`：`$fallback_backend`/`$fallback_host` 在 `nginx.conf.template` 中按 `PROXY_FALLBACK_BACKEND`/`AUTH_FALLBACK_BACKEND` 分别注入，优先级高于全局 `FALLBACK_BACKEND`）。后端对非标 `CONNECT` 自然返回 `400/405`，对普通浏览返回正常页面——所有错误均由真实后端产生，网关自身不伪造任何响应。
+
+> **实现落点**：`@native_tunnel` 内联于 `nginx.conf.template` 代理 server 块（`nginx/conf.d/tunnel.conf` 为历史遗留，未被主配置引用）；`@backend` 见 `nginx/conf.d/backend.conf`。
 
 ---
 
@@ -56,18 +57,19 @@ RestyTunnel 采用了基于 **共享内存盘 `/dev/shm`** 的 UDS 技术（`uni
 
 RestyTunnel 展现出了完美的协议解耦性，公网两端、内部接驳的协议各司其职，互不污染：
 
-### 1. 公网传输：高贵标准的 TLS 1.3 + HTTP/1.1 标准安全隧道
-* 为了完美绕过 Nginx 原生 `tunnel_pass` 与多路复用（HTTP/2、HTTP/3 帧解析机制）的物理冲突，我们在正向代理域名上主动关闭了 HTTP/2 和 HTTP/3 协商。
-* 客户端在公网上与 Nginx 建立的是标准的、拥有高强度的 **TLS 1.3 + HTTP/1.1** 安全管道。
+### 1. 公网传输：TLS 1.3 + HTTP/1.1 标准安全隧道（代理域）
+* 代理域名（`nginx.conf.template` 代理 server 块）显式配置 `http2 off; http3 off;`，客户端在公网与 Nginx 建立标准的 **TLS 1.3 + HTTP/1.1** 安全管道，发送 HTTP/1.1 文本 `CONNECT`。
+* 这是由 Nginx 1.31 原生 `tunnel_pass`（无参数，复用原始 `CONNECT` 的目标 host）只认识 HTTP/1.1 文本 CONNECT 决定的：若协商 H2/H3 并发送 H2 CONNECT 帧，原生内核无法解析，会直接报错断开。
 * 所有数据完全包裹在 TLS 1.3 强加密隧道内部，呈现 100% 标准、高熵的二进制流量，完美融入背景流量噪声（在全球网络中，超过 40% 的正常网站、WebSocket 以及大厂 API 回源连接，在 TLS 1.3 内部仍然使用标准的 HTTP/1.1 通信，因此这是一个完全契合网民正常行为分布的无特征流）。
+* 授权管理域名（`AUTH_DOMAIN`）则完整开启 H2/H3（`http2 on;` + `listen ... quic` + `http3 on;` + `Alt-Svc`），走 Cloudflare 保护，用于控制台与加白面板；代理域不发送 `Alt-Svc`。
 
 ### 2. 内部降维：HTTP/1.1 CONNECT (控制暗号)
-Nginx 1.31 核心 `tunnel_pass` 在开源版里只认识 1.1 协议。
+Nginx 1.31 核心 `tunnel_pass`（无参数）在开源版里只认识 1.1 协议。
 * 在建立代理握手时，客户端发送标准的 HTTP/1.1 `CONNECT` 代理指令，由 OpenResty 在本地内存中进行高效的安全验证。
 * 这个 HTTP/1.1 `CONNECT` 验证机制完全在 TLS 加密保护中，并且我们的控制端/授权端依然可以使用 HTTP/2 进行极速多路复用接驳，完美实现多协议共存。
 
 ### 3. 数据盲传：四层虚拟连接（协议透明）
-当 `tunnel_pass` 被 1.1 的钥匙激活后，它与目标网站（如 Google）的 443 端口建立盲管道：
+当 `tunnel_pass`（无参数）被 1.1 的钥匙激活后，它与目标网站（如 Google）的 443 端口建立盲管道：
 * 1.31 内核不再解析任何七层协议，它扮演的是“盲眼传送带”。
 * 客户端直接通过这条盲管道，向 Google 发起原生的 **TLS 1.3 握手（内层 TLS）**。
 * 在隧道的**内部**，所有的网页数据完全是以目标源站原生的协议（如 H2/H3）在传输。目标源站吐出的现代高级特性（Header 头部压缩、服务器推送、TCP 拥塞控制）完好无损地直达客户端。
@@ -85,16 +87,16 @@ Nginx 1.31 核心 `tunnel_pass` 在开源版里只认识 1.1 协议。
 为了在绝对不破坏 OpenResty 1.31-alpine 官方镜像纯净度的前提下，实现 100% 稳定、安全的证书加载，我们设计了极具弹性的**三维一体证书管理方案**：
 
 #### 1. Base64 证书一键安全注入（最推荐，无盘高弹形态）
-通过配置环境变量 `SSL_CERT_BASE64` 和 `SSL_KEY_BASE64` 直接传入经过 Base64 编码的证书和私钥。在内存物理盘 `/dev/shm` 甚至无状态容器启动时由 `bootstrap.sh` 实时动态解码并写入 `/etc/nginx/ssl`，彻底消除了磁盘 I/O 损耗并杜绝了本地敏感文件泄漏。
+通过配置环境变量 `RT_SSL_CERT_BASE64` 和 `RT_SSL_KEY_BASE64` 直接传入经过 Base64 编码的证书和私钥。容器启动时由 `bootstrap.sh` 实时动态解码并写入证书路径（`RT_SSL_CERT_PATH` / `RT_SSL_KEY_PATH`，默认 `/etc/nginx/ssl/cert.pem` 与 `/etc/nginx/ssl/key.pem`），彻底消除了磁盘 I/O 损耗并杜绝了本地敏感文件泄漏。
 
 #### 2. 常规宿主机卷挂载形式
-通过 Docker Volumes 将宿主机中由 `acme.sh` 或 `certbot` 续签获得的证书文件夹挂载至容器的 `/etc/nginx/ssl` 目录：
-- `fullchain.pem` - 公钥证书
-- `privkey.pem` - 证书私钥
+通过 Docker Volumes 将宿主机中由 `acme.sh` 或 `certbot` 续签获得的证书文件夹挂载至容器的证书路径（默认 `/etc/nginx/ssl/` 目录）：
+- `cert.pem` - 公钥证书（可经 `RT_SSL_CERT_PATH` 自定义）
+- `key.pem` - 证书私钥（可经 `RT_SSL_KEY_PATH` 自定义）
 Nginx 自动识别并可在不重启容器的情况下通过 `nginx -s reload` 平滑热加载。
 
 #### 3. 保底开发自签名证书自愈
-容器启动时，`bootstrap.sh` 会自动检测 `/etc/nginx/ssl`。如果没有任何证书，将立刻调用本地 `openssl req -x509` 动态产生开发保底自签名证书。Nginx 成功携带保底证书平滑启动，占领 443 端口，确保整个启动流程零报错、自愈自适应。
+容器启动时，`bootstrap.sh` 会自动检测证书路径（`RT_SSL_CERT_PATH` / `RT_SSL_KEY_PATH`）。如果没有任何证书，将立刻调用本地 `openssl req -x509` 动态产生开发保底自签名证书。Nginx 成功携带保底证书平滑启动，占领 443 端口，确保整个启动流程零报错、自愈自适应。
 
 ---
 
@@ -105,4 +107,4 @@ Nginx 自动识别并可在不重启容器的情况下通过 `nginx -s reload` �
 | **客户端 ➔ OpenResty** | 公网 | **TLS 1.3 + HTTP/1.1** (代理域)<br>**TLS 1.3 + HTTP/2** (控制域) | 封装在 **外层 TLS 1.3** 中 | 通过 TLS 1.3 强加密，使 CONNECT 命令完全不可见；在控制端启用 H2，利用 Cloudflare 保护管理面板安全。 |
 | **OpenResty ➔ 1.31 核心** | 服务器本地内存 | 降维改写为 **HTTP/1.1 CONNECT** | 内存指针重定向 | 仅作为本地内接的控制暗号。由于发生在内存中，公网完全不可见。 |
 | **1.31 核心 ➔ 目标源站** | 互联网标准 TCP | 协议结束 (四层盲转) | 目标源站原生的 **内层 TLS (H2/H3)** | Nginx 变身“盲人”，开启纯 C 原生盲转，不进行任何解密包分析，吞吐量榨干。 |
-| **证书管理** | 容器内启动脚本引导 | **Base64 / 挂载 / 自签名自愈** | 自动化动态渲染生成 | `bootstrap.sh` 提供保底自签名、宿主机持久化挂载及内存 Base64 注入三路保底。 |
+| **证书管理** | 容器内启动脚本引导 | **Base64 / 挂载 / 自签名自愈** | 自动化动态渲染生成 | `bootstrap.sh` 提供保底自签名、宿主机持久化挂载及内存 Base64 注入三路保底（路径 `RT_SSL_CERT_PATH`/`RT_SSL_KEY_PATH`，默认 `/etc/nginx/ssl/cert.pem` 与 `/etc/nginx/ssl/key.pem`）。 |

@@ -165,7 +165,7 @@ docker run -d --name my-restyguard \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `RG_NGINX_LOG_LEVEL` | `notice` | Nginx 错误日志打印等级。默认 `notice` 极致静音，可完美屏蔽本地高频环回 proxy connected 冗余日志；需要深度调试时可设为 `info`。 |
-| `RG_TASK_CLEAN_LOG_INTERVAL_SECONDS` | `600` | 日志清理任务的执行周期（秒） |
+| `RG_TASK_CLEAN_LOG_INTERVAL_SECONDS` | `60` | 日志清理任务的执行周期（秒）。实际默认值以 `scripts/bootstrap.sh` 为准（60s），`docker-compose.yml` 示例为 600s。 |
 | `RG_TASK_CLEAN_LOG_RETAIN_LINES` | `10` | 日志保留的行数，超出部分将被物理裁剪并触发 reopen 通知 |
 | `RG_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS` | `86400` | 白名单清理任务的执行周期（秒），默认 24 小时 |
 | `RG_SHOW_REJECTED_LOG` | `false` | 是否允许通过控制台查看拒绝日志 |
@@ -175,7 +175,7 @@ docker run -d --name my-restyguard \
 
 ## 管理控制台与授权使用
 
-所有管理接口通过公网唯一 443 端口访问，并且完全实现了 **“URL 参数自动清洗（302 洗刷）”**，100% 杜绝密码在浏览器地址栏和代理日志中泄漏的风险。
+所有管理接口通过公网唯一 443 端口访问，并且完全实现了 **“URL 参数自动清洗（200 落地页洗刷）”**，100% 杜绝密码在浏览器地址栏和代理日志中泄漏的风险。
 
 ### 首次加白激活（使用 TOTP 动态口令示例）
 
@@ -185,7 +185,7 @@ docker run -d --name my-restyguard \
 https://auth.yourdomain.com/auth/my-secure-token-12345?u=bob&code=123456
 ```
 
-*   **洗刷与跳转**：页面加载成功的瞬间，Lua 会在您的浏览器中埋入 30 天滑动有效的安全 Cookie 锁，并**立刻执行 302 重定向**跳转到纯净短链接：
+*   **洗刷与跳转**：页面加载成功的瞬间，Lua 会在您的浏览器中埋入 30 天滑动有效的安全 Cookie 锁，并返回 200 HTML 落地页（`meta refresh` + `window.location.replace`）跳转到纯净短链接：
     `https://auth.yourdomain.com/auth/my-secure-token-12345`。
     明文参数在地址栏停留时间少于 0.1 秒，完美洗刷痕迹！
 *   **黑客刺探**：不提供口令或口令过期试探 ➔ Nginx **绝对不弹出 401 对话框暴露大闸指纹**，而是静默、高保真地反代您的网盘后端，安全等级极高。
@@ -262,7 +262,9 @@ RestyGuard 支持**自适应 SNI 动态路由**机制。当客户端发起 TLS �
 ```
 ├── Dockerfile                        # Docker 构建文件
 ├── docker-entrypoint.sh              # 容器入口脚本
-├── .gitignore                        # Git 忽略规则
+├── docker-compose.yml                # Compose 示例（仅映射 443）
+├── upstream_rules.conf               # 静态路由规则（domain=host:port）
+├── .env.example                      # 环境变量示例
 ├── certs/                            # TLS 证书目录（不提交到仓库）
 │   ├── README.md
 │   ├── ca.pem
@@ -279,7 +281,8 @@ RestyGuard 支持**自适应 SNI 动态路由**机制。当客户端发起 TLS �
 │   │   │   └── auth_view.lua         # 移动端自适应控制台渲染
 │   │   └── stream/
 │   │       ├── check_whitelist.lua   # 负防缓存/并发限流物理熔断白名单检查
-│   │       └── stream_handler.lua    # 443 L4 智能分流与防公开代理网关
+│   │       ├── stream_handler.lua    # 443 L4 智能分流与防公开代理网关
+│   │       └── upstream_rules.lua    # 内存路由表（静态文件+环境变量合并）
 │   └── templates/
 │       ├── nginx.conf.template       # 主配置文件模板
 │       ├── stream-main.conf.template # Stream 四层服务器模板
@@ -287,5 +290,6 @@ RestyGuard 支持**自适应 SNI 动态路由**机制。当客户端发起 TLS �
 │       ├── mtls.conf.template        # 双向 TLS 校验大闸模板
 │       └── ip-validation.conf.template # CDN 真实 IP 优先级识别链
 └── scripts/
-    └── generate-dev-certs.sh         # 100年长效自签名开发证书生成
+    ├── bootstrap.sh                  # 启动时动态生成 Nginx 配置
+    └── generate-dev-certs.sh         # 开发用自签名证书生成
 ```

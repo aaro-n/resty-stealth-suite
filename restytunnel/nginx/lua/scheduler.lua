@@ -62,7 +62,8 @@ function _M.start()
     schedule_recurring_task(whitelist_interval, tasks.clean_expired_whitelist_entries, "白名单过期清理")
 
     -- 🚀 [新增] 定时流式裁剪黑名单拦截日志，防止日志文件无限膨胀，保障磁盘空间与读取性能
-    local log_interval = tonumber(os.getenv("RT_TASK_CLEAN_LOG_INTERVAL_SECONDS") or 60)
+    -- 经 config 集中读取，兼容 RT_/无前缀别名与 d/h/m/s 单位
+    local log_interval = config.log_clean_interval or 60
     schedule_recurring_task(log_interval, tasks.clean_rejected_log, "黑名单日志裁剪")
 end
 

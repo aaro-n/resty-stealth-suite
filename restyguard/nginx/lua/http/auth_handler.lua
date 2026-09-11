@@ -141,14 +141,23 @@ local function check_stealth_auth()
     end
 
     -- 逐个解析逗号分隔的用户记录
+    -- 格式: username:password_or_TOTP[:optional_totp_secret]
+    -- 另支持 RG_TOTP_SECRET 作为全局兜底：当用户条目未携带独立 totp_secret、
+    -- 且 credential 为 TOTP 时，使用该全局密钥校验动态口令。
+    local global_totp_secret = os.getenv("RG_TOTP_SECRET")
+    if global_totp_secret == "" then global_totp_secret = nil end
     for user_entry in string.gmatch(raw_users, "([^,]+)") do
         -- 脱壳与清洗多余空格
         user_entry = string.gsub(user_entry, "^%s*(.-)%s*$", "%1")
         local username, val1, val2 = string.match(user_entry, "^([^:]+):([^:]+):?(.*)$")
         if username and val1 then
+            local secret = (val2 ~= "" and val2 or nil)
+            if (not secret) and val1 == "TOTP" then
+                secret = global_totp_secret
+            end
             users_db[username] = {
                 credential = val1,
-                totp_secret = (val2 ~= "" and val2 or nil)
+                totp_secret = secret
             }
         elseif not username then
             -- 兼容只有 username:password 的极简写法
@@ -174,8 +183,9 @@ local function check_stealth_auth()
     local cookie_str = get_cookie_string(headers["Cookie"])
 
     if cookie_str ~= "" then
-        local cookie_user = string.match(cookie_str, "gkp_user=([%w%.%_%-]+)")
-        local cookie_pass = string.match(cookie_str, "gkp_session=([%w]+)")
+        -- Cookie 值可能包含 Base32 种子（A-Z2-7=）或任意密码字符，放宽字符集避免合法 Cookie 被截断。
+        local cookie_user = string.match(cookie_str, "gkp_user=([^;%s]+)")
+        local cookie_pass = string.match(cookie_str, "gkp_session=([^;%s]+)")
         if cookie_user and cookie_pass then
             local user_record = users_db[cookie_user]
             -- 如果 Cookie 里的用户存在，且密码吻合（对于 TOTP 用户，其密码固定比对 totp_secret，同样支持完美免密 Cookie 顺延）
@@ -323,10 +333,14 @@ local method = ngx.req.get_method()
 -- 1. 解析客户端真实 IP 与请求 IP
 -- 🚀 [极其严密的真实 IP 穿透抓取调优]
 -- 优先使用 Nginx 物理计算的真实客户端 IP。若因环回分流导致为空，则依次从 CF、XFF 标头穿透获取。
+-- 注意：X-Forwarded-For 可能为 "client, proxy1, proxy2" 链，只取最左侧首个 IP。
 local visitor_ip = ngx.var.final_real_client_ip
 if not visitor_ip or visitor_ip == "" or visitor_ip == "127.0.0.1" then
     local headers = ngx.req.get_headers()
     visitor_ip = headers["CF-Connecting-IP"] or headers["X-Forwarded-For"]
+    if visitor_ip and string.find(visitor_ip, ",") then
+        visitor_ip = string.match(visitor_ip, "^%s*([^,%s]+)")
+    end
 end
 -- 终极兜底，防环回截断
 if not visitor_ip or visitor_ip == "" or visitor_ip == "127.0.0.1" then

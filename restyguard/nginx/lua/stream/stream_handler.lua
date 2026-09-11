@@ -7,7 +7,8 @@ local ngx_ERR = ngx.ERR
 local enable_ip_whitelist = os.getenv("RG_ENABLE_IP_WHITELIST") ~= "false"
 
 -- 🚀 [精简端口：安全授权域名解析与绕过预加载]
-local auth_domain_str = os.getenv("RG_AUTH_DOMAIN") or "auth.localhost"
+-- 默认值与 scripts/bootstrap.sh 中 RG_AUTH_DOMAIN 默认值（localhost）保持一致。
+local auth_domain_str = os.getenv("RG_AUTH_DOMAIN") or "localhost"
 local auth_domains = {}
 for domain in string.gmatch(auth_domain_str, "([^,]+)") do
     -- 去除可能存在的前后空格

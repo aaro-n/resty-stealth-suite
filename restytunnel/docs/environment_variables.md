@@ -30,7 +30,7 @@
 
 | 变量名 (推荐) | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| `RT_ENABLE_IP_WHITELIST` | `false` | **IP 白名单总开关**。设为 `true` 时，只有已授权的 IP 才能使用代理服务。生产环境强烈建议开启。兼容旧版 `ENABLE_IP_WHITELIST`。|
+| `RT_ENABLE_IP_WHITELIST` | `false` | **IP 白名单总开关**。设为 `true` 时，无凭证的浏览器冷启动请求仅对已加白 IP 回 `407` 挑战；携带正确密码的请求直接放行（不看白名单）。生产环境强烈建议开启。兼容旧版 `ENABLE_IP_WHITELIST`。|
 | `RT_AUTH_DOMAIN` | `auth.localhost` | **白名单授权管理域名**。这是您的第二个域名，专门用于网页端自助添加 IP。推荐在 Cloudflare 开启 CDN 代理（小黄云）来隐藏真实源站 IP。兼容旧版 `AUTH_DOMAIN`。|
 | `RT_AUTH_PATH_PREFIX` | `auth` | **授权管理页面的随机子路径前缀**，构成 `https://[RT_AUTH_DOMAIN]/[RT_AUTH_PATH_PREFIX]/[RT_SECRET_TOKEN]` 访问 URL 的一部分，作为第一重防扫描防线。兼容旧版 `AUTH_PATH_PREFIX`。|
 | `RT_SECRET_TOKEN` | `mysecrettoken123` | **授权管理页面的安全随机密令**，构成访问 URL 的最后一部分，作为第二重防扫描防线。请务必修改为一个长且无规律的强密码。兼容旧版 `SECRET_TOKEN`。|
@@ -39,7 +39,7 @@
 | `RT_ENABLE_VIEW_WHITELIST` | `true` | **是否允许在网页端面板查看活跃白名单列表**（隐私安全开关）。设为 `false` 时，该板块将被安全屏蔽，在多用户共用时保障横向隔离隐私。兼容旧版 `ENABLE_VIEW_WHITELIST`。|
 | `RT_ENABLE_VIEW_BLACKLIST` | `true` | **是否允许在网页端面板查看被阻断拦截日志**（隐私安全开关）。设为 `false` 时，该板块将被安全屏蔽。兼容旧版 `ENABLE_VIEW_BLACKLIST`。|
 | `RT_USERS` | (由 `RT_PROXY_USERNAME` 和 `RT_PROXY_PASSWORD` 组成) | **多用户及 TOTP 认证配置**。格式如 `user1:pass1:totp_secret,user2:pass2`。若未配置，则自动降级为 `RT_PROXY_USERNAME:RT_PROXY_PASSWORD` 作为单个静态密码用户。|
-| `RT_SESSION_TTL_SECONDS` | `2592000` | **Web 控制台登录会话 Cookie 保持生存时间**（秒）。在登录成功后 Cookie 维持的时长，默认 30 天。兼容 `RT_SESSION_TTL` (支持 `d`, `h`, `m`, `s` 单位)。|
+| `RT_SESSION_TTL_SECONDS` | `2592000` | **Web 控制台登录会话 Cookie 保持生存时间**（秒）。Cookie 为 HMAC 签名会话（`exp.sig`，密钥派生自用户密码/TOTP 种子，服务端无状态校验，过期/篡改自动失效），默认 30 天，支持滑动续期。兼容 `RT_SESSION_TTL` (支持 `d`, `h`, `m`, `s` 单位)。|
 | `RT_TOTP_VALID_WINDOW_SECONDS`| `300` | **TOTP 容差校验时间窗口大小**（秒）。默认 300 秒（前后各 150 秒均分容错），完美对齐 Google/Microsoft Authenticator 等手机端 APP 的时间步长。兼容 `RT_TOTP_VALID_WINDOW`。|
 
 ### 2.1 错密黑名单（防爆破减速带）
@@ -48,11 +48,11 @@
 
 | 变量名 (推荐) | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| `RT_BLACKLIST_ENABLED` | `true` | **错密黑名单总开关**。设为 `false` 时整段功能关闭，鉴权行为退回纯双模式（正确密码放行 + 白名单定向 407），无计数无拉黑。|
-| `RT_BLACKLIST_THRESHOLD` | `5` | **错密拉黑阈值**（次）。同一 IP（按真实 TCP 源地址计数，不采信 X-Forwarded-For，防伪造栽赃）在有效期内累计错密达到该次数即被拉黑。已在黑名单内的 IP 不再重复计数。|
-| `RT_BLACKLIST_TTL_HOURS` | `24` | **黑名单有效期**（单位：小时）。拉黑到期后自动解除；也可通过管理界面 TOTP 加白该 IP 立即清除黑名单记录（B 兜底）。|
+| `RT_BLACKLIST_ENABLED` | `true` | **错密黑名单总开关**。设为 `false` 时整段功能关闭，鉴权行为退回纯双模式（正确密码放行 + 白名单定向 407），无计数无拉黑。兼容旧版 `BLACKLIST_ENABLED`。|
+| `RT_BLACKLIST_THRESHOLD` | `5` | **错密拉黑阈值**（次）。同一 IP（按 Nginx 还原后的 `remote_addr` 计数，绝不采信客户端 XFF，防伪造栽赃）在有效期内累计错密达到该次数即被拉黑。已在黑名单内的 IP 不再重复计数。兼容旧版 `BLACKLIST_THRESHOLD`。|
+| `RT_BLACKLIST_TTL_HOURS` | `24` | **黑名单有效期**（单位：小时）。拉黑到期后自动解除；也可通过管理界面为本连接 IP 加白立即清除黑名单记录。兼容旧版 `BLACKLIST_TTL_HOURS`。|
 
-> 🛡️ **黑名单行为细节**：被拉黑 IP 的「无凭证 / 错密」请求一律静默回落伪装（与未加白 IP 无差别，绝不回 407）；但「携带正确密码」的请求照常放行建隧道——正确密码本身就是最强身份证明，IP 级黑名单无权拦截密码级已验证的身份。黑名单存储于共享内存（`blacklist_dict`），自带 TTL 自动过期，容器重启后清零。
+> 🛡️ **黑名单行为细节**：被拉黑 IP 的「无凭证 / 错密」请求一律静默回落伪装（与未加白 IP 无差别，绝不回 407）；但「携带正确密码」的请求照常放行建隧道——正确密码本身就是最强身份证明，IP 级黑名单无权拦截密码级已验证的身份。黑名单存储于共享内存（`blacklist_dict`，`nginx.conf.template` 中 `lua_shared_dict blacklist_dict 10m`），自带 TTL 自动过期，容器重启后清零。实现落点：`nginx/lua/blacklist.lua` + `nginx/conf.d/gateway.conf` + `nginx/lua/whitelist.lua`（加白清黑名单）。
 
 ---
 
@@ -83,8 +83,9 @@
 | `RT_DNS_RESOLVER` | `1.1.1.1 8.8.8.8 ipv6=off` | **【优化】指定 Nginx 解析正向代理目标网站时所使用的 DNS 解析服务器**。如果部署在不同的网络区域（如中国大陆），请修改为低时延的受信任 DNS（如 `223.5.5.5 119.29.29.29 ipv6=off`）以获得极致的域名解析速度。兼容旧版 `DNS_RESOLVER`。|
 | `RT_AUTH_RATE_LIMIT` | `5r/m` | **白名单面板防暴力破解速率限制**。`r/s` 代表每秒请求数, `r/m` 代表每分钟请求数。默认每分钟 5 次。兼容旧版 `AUTH_RATE_LIMIT`。|
 | `RT_DISABLE_REJECT_LOG` | `false` | **是否禁用被拒 IP 的日志记录**。对于高度注重隐私或希望减少磁盘 I/O 的用户，可设为 `true` 禁用。兼容旧版 `DISABLE_REJECT_LOG`。|
-| `RT_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS` | `3600` | **后台白名单过期自动清理周期**（单位：秒）。默认每 1 小时扫描并清理一次。兼容旧版 `TASK_CLEAN_WHITELIST_INTERVAL_SECONDS`。|
-| `RT_TASK_CLEAN_LOG_RETAIN_LINES` | `30` | **被拒阻断日志在内存中的最大保留行数（流式精密控行）**。每当发生新的恶意阻断时，会在第一时间在 Lua 内存中进行自动原子裁剪，仅保留最新行。默认 30 行。兼容旧版 `TASK_CLEAN_LOG_RETAIN_LINES`。|
+| `RT_TASK_CLEAN_WHITELIST_INTERVAL_SECONDS` | `3600` | **后台白名单过期自动清理周期**（单位：秒）。默认每 1 小时扫描并清理一次。兼容旧版 `TASK_CLEAN_WHITELIST_INTERVAL_SECONDS` 及 `RT_TASK_CLEAN_WHITELIST_INTERVAL`（`config.lua` 兼容）。|
+| `RT_TASK_CLEAN_LOG_RETAIN_LINES` | `30` | **被拒阻断日志在内存中的最大保留行数（流式精密控行）**。后台 `scheduler.lua` 每 `RT_TASK_CLEAN_LOG_INTERVAL_SECONDS` 触发 `tasks.clean_rejected_log` 裁剪至该行数。默认 30 行。兼容旧版 `TASK_CLEAN_LOG_RETAIN_LINES`。|
+| `RT_TASK_CLEAN_LOG_INTERVAL_SECONDS` | `60` | **拦截日志自动裁剪任务的执行周期（秒）**。默认每 60 秒由后台调度器触发一次。兼容旧版 `TASK_CLEAN_LOG_INTERVAL_SECONDS`。|
 | `RT_WHITELIST_DB_PATH` | `/dev/shm/whitelist.db` | **【高级】自定义白名单数据文件的硬盘存储绝对路径**。默认存储于性能极致的纯物理内存 RAM 磁盘（`tmpfs: /dev/shm`）中以完全消灭文件磁盘 I/O 开销。兼容旧版 `WHITELIST_DB_PATH`。|
 | `RT_REJECTED_LOG_PATH` | `/dev/shm/rejected_ips.log` | **【高级】自定义恶意探测与拦截日志文件的硬盘存储绝对路径**。默认存储于内存 RAM 磁盘。兼容旧版 `REJECTED_LOG_PATH`。|
 
@@ -96,5 +97,5 @@
 
 | 变量名 (推荐) | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| `RT_SSL_CERT_BASE64` | (空) | **Base64 编码后的 `cert.pem` 证书内容**。如果设置了此变量，容器启动时会自动解码并写入证书文件。兼容旧版 `SSL_CERT_BASE64`。|
-| `RT_SSL_KEY_BASE64` | (空) | **Base64 编码后的 `key.pem` 密钥内容**。如果设置了此变量，容器启动时会自动解码并写入密钥文件。兼容旧版 `SSL_KEY_BASE64`。|
+| `RT_SSL_CERT_BASE64` | (空) | **Base64 编码后的 `cert.pem` 证书内容**。如果设置了此变量，容器启动时会自动解码并写入证书文件（需与 `RT_SSL_KEY_BASE64` 同时提供才生效，见 `scripts/bootstrap.sh`）。兼容旧版 `SSL_CERT_BASE64`。|
+| `RT_SSL_KEY_BASE64` | (空) | **Base64 编码后的 `key.pem` 密钥内容**。如果设置了此变量，容器启动时会自动解码并写入密钥文件（需与 `RT_SSL_CERT_BASE64` 同时提供）。兼容旧版 `SSL_KEY_BASE64`。|

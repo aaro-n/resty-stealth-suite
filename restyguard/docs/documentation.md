@@ -9,7 +9,7 @@
 1. **客户端劫持**：将本地的特定域名（如 `translate.googleapis.com`）通过 `hosts` 文件或本地 DNS 服务指向 RestyGuard 的公网 IP。
 2. **四层 TLS 透传 (SNI-Proxy)**：当客户端发起 TLS 握手时，RestyGuard 监听 443 端口，利用 Nginx 的 `ssl_preread` 模块提前读取 TLS Client Hello 中的 **SNI (Server Name Indication)**，从而获取目标域名。之后，它在**不解密、不需要目标域名证书和私钥**的情况下，将 TCP 流量透明透传至目标网站。
 3. **防火墙安全拦截**：为防止公网 443 端口被扫描器探测到并滥用，所有经过 443 端口的代理请求在接入前，都会经过 Lua 编写的 **IP 白名单防火墙**。只有已被授权的公网 IP 才能建立隧道，其他任何未授权连接都将被强行断开（Empty Reply）并记录日志，安全级别极高。
-4. **一键授权（动态 IP 白名单）**：用户只需要通过浏览器或快捷脚本访问一次管理接口：`https://<IP>:8443/auth/<RG_SECRET_TOKEN>`，系统即可自动抓取用户的最新公网 IP，将其加入白名单并设置 TTL 过期时间，实现无感安全代理。
+4. **一键授权（动态 IP 白名单）**：用户通过管理域名经公网 443 端口访问管理接口：`https://<RG_AUTH_DOMAIN>/<RG_AUTH_PATH_PREFIX>/<RG_SECRET_TOKEN>?u=<user>&p=<pass>`（或 `?u=<user>&code=<6位TOTP>`），携带合法用户凭证后，系统自动抓取用户的最新公网 IP，将其加入白名单并设置 TTL 过期时间，实现无感安全代理。注意：必须先配置 `RG_NGINX_USERS`，且管理流量走 443（SNI=`RG_AUTH_DOMAIN`），8443 仅为容器内环回端口，不对外暴露。
 
 ---
 
@@ -32,9 +32,9 @@
                        │                                │                       │
                        │                                ▼                       │
                        │                         127.0.0.1:8443                 │
-                       │                         (HTTPS 环回管理 & IP 诊断服务)  │
-                       │                            ├─► /auth/RG_SECRET_TOKEN (授权)│
-                       │                            └─► /ip (安全 TLS IP 诊断)   │
+                       │                         (HTTPS 环回管理服务)             │
+                       │                            └─► /<PREFIX>/<TOKEN> (授权控制台)│
+                       │                                需 RG_NGINX_USERS 凭证      │
                        └────────────────────────────────────────────────────────┘
 ```
 
@@ -44,9 +44,9 @@
     *   **四层自适应 Bypass**：如果请求的 SNI 匹配配置的 `RG_AUTH_DOMAIN`（管理域名），系统将无条件放行（绕过拦截），并将其高速路由至本地环回代理接口 `127.0.0.1:18443`。
     *   **自适应 SNI 动态路由 (全新升级)**：如果请求的域名未在显式规则中定义，RestyGuard 会自动将请求透明转发至其原本对应的 `[SNI域名]:443`。
 *   **127.0.0.1:8443 (本地回环管理/HTTPS)**：
-    *   默认启用单向 TLS，确保管理链接不被泄露和嗅探。
-    *   核心路由 `/<RG_AUTH_PATH_PREFIX>/<RG_SECRET_TOKEN>`：访问即可自动添加/更新客户端 IP 白名单，并返回具有良好移动端适配的手动管理表单页面。
-    *   安全内置 `/ip` 诊断接口：免去原本公网暴露 8080 端口产生的指纹泄露，只需访问 `https://<RG_AUTH_DOMAIN>/ip` 即可进行安全的客户端真实 IP 精准识别和提供 CDN 标头数据。
+    *   默认启用单向 TLS，确保管理链接不被泄露和嗅探（`RG_NGINX_TLS_MODE=http` 仅用于本地调试，此时仍接收 PROXY Protocol）。
+    *   核心路由 `/<RG_AUTH_PATH_PREFIX>/<RG_SECRET_TOKEN>`：需先通过 `RG_NGINX_USERS` 凭证校验（`?u=&p=` 静态密码或 `?u=&code=` TOTP，或 30 天滑动 Cookie 免密），校验通过后自动添加/更新客户端 IP 白名单，并返回移动端适配的管理表单页面；未通过则静默反代 `RG_FALLBACK_BACKEND`（`@fallback`），绝不返回 401。
+    *   说明：当前代码未提供独立 `/ip` 诊断接口，客户端真实 IP 直接展示在管理控制台顶部（`final_real_client_ip` 经 CDN 头链 + PROXY Protocol 还原）。
 
 ---
 
@@ -77,14 +77,14 @@ end
 ```
 
 ### 3.2 `server_name` 参数缺失缺陷（致命启动 Bug 修复）
-在 `23-generate-auth-server.sh` 脚本中，如果用户启动容器时没有传入 `RG_AUTH_DOMAIN`，并且 `RG_AUTH_ALLOW_ANY_DOMAIN` 为默认的 `false`，生成脚本会直接输出：
+在 `scripts/bootstrap.sh`（旧 `23-generate-auth-server.sh`）中，如果用户启动容器时没有传入 `RG_AUTH_DOMAIN`，并且 `RG_AUTH_ALLOW_ANY_DOMAIN` 为默认的 `false`，生成脚本会直接输出：
 ```nginx
 server_name ;
 ```
 这会导致 Nginx 提示 `invalid number of arguments in "server_name" directive` 并在容器启动时瞬间崩溃。
 
 **解决方案**：
-在 `00-set-defaults.sh` 默认环境变量配置中，增加了对 `RG_AUTH_DOMAIN` 的缺省容错设置：
+在 `scripts/bootstrap.sh` 的 `set_defaults()`（旧 `00-set-defaults.sh`）中，增加了对 `RG_AUTH_DOMAIN` 的缺省容错设置（默认 `localhost`，与 `stream_handler.lua` 回退值一致）：
 ```bash
 export RG_AUTH_DOMAIN=${RG_AUTH_DOMAIN:-localhost}
 ```
@@ -128,18 +128,23 @@ javascript:(function(){var baseUrl="https://YOUR_AUTH_DOMAIN/YOUR_PATH_PREFIX/YO
 ```bash
 docker run -d --name restyguard \
   -e RG_SECRET_TOKEN="your-strong-secret-token" \
+  -e RG_AUTH_DOMAIN="auth.yourdomain.com" \
+  -e RG_NGINX_USERS="admin:your-password" \
   -e RG_SHOW_REJECTED_LOG=true \
   -e RG_SHOW_WHITELIST_DB=true \
-  -p 443:443 -p 8443:8443 -p 8080:8080 \
+  -p 443:443 \
   restyguard
 ```
 
+> 单端口架构：容器仅对外暴露 443。8443/8080 不再对外映射，8443 仅为容器内 `127.0.0.1` 环回服务。
+
 ### 4.3 白名单一键授权
-打开浏览器，访问您的授权链接：
+1. 将管理域名解析到服务器公网 IP（DNS A 记录或本地 hosts）。
+2. 打开浏览器，访问您的授权链接（静态密码示例）：
 ```
-https://<您的服务器IP>:8443/auth/your-strong-secret-token
+https://auth.yourdomain.com/auth/your-strong-secret-token?u=admin&p=your-password
 ```
-界面将提示 `添加成功`，并且将您的当前公网 IP 精确记录进白名单。
+校验通过后返回 200 HTML 落地页并写入 30 天滑动 Cookie，随后自动跳转到干净短链接并提示 `白名单授权成功`，您的当前公网 IP 即被记录进白名单。TOTP 用户改用 `?u=bob&code=123456`。
 
 ### 4.4 本地 Hosts 绑定配置
 在您的客户端电脑（Windows/macOS/Linux）上，编辑 `hosts` 文件，将想要代理和加速的服务域名强行解析到您的 RestyGuard 服务器：
@@ -170,14 +175,14 @@ https://<您的服务器IP>:8443/auth/your-strong-secret-token
     curl -v http://<您的服务器公网IP>:443/
     ```
     连接将被服务器强行切断，返回 `Empty reply from server`。
-*   **查看拦截记录**：
+*   **查看拦截记录**（需 `RG_SHOW_REJECTED_LOG=true`，且先完成控制台登录拿到 Cookie）：
     访问：
     ```
-    https://<您的服务器IP>:8443/auth/your-strong-secret-token/rejected_ips.log
+    https://auth.yourdomain.com/auth/your-strong-secret-token/rejected_ips.log
     ```
     您能看到刚才由于未加白而被防火墙拦截的扫描记录，格式如下：
     ```
-    [17/Jun/2026:17:39:39 +0000] <未授权IP>
+    [17/Jun/2026:17:39:39 +0000] <未授权IP> - Reason: Unauthorized Access to Bound Domain - SNI: github.com
     ```
 
 ---
@@ -334,59 +339,9 @@ $$\text{按主机名 (Per-Hostname)} > \text{区域级 (Zone-Level)} > \text{全
 
 ---
 
-## 🔒 5.5 极致安全防探测：TOTP 动态口令与 302 重定向洗刷加白
+## 🔒 5.5 极致安全防探测：多用户自适应 TOTP 动态口令与落地页洗刷（当前实现）
 
-为了在“无状态、不引入外部数据库”的前提下彻底杜绝管理控制台因弹窗引发指纹扫描，系统升级了最先进的 **TOTP 动态口令与滑动 Session 锁合一防线**：
-
-### 1. 为什么采用这套方案？（技术前因后果总结）
-*   **攻防背景**：传统的 HTTP Basic Auth 存在严重的“401 WWW-Authenticate”劫持硬伤。如果服务器向不带密码的浏览器返回 401 信号，会强制触发浏览器的弹窗，这给扫描器指明了“此处存在密码大门”的破绽。
-*   **传统方案硬伤**：若为了隐形直接让不满足校验的请求返回 200 并反代网盘，浏览器由于没有收到 401 挑战信号，其内部的 `https://user:pass@domain` 自动重试机制永远不会被唤醒。导致合法的用户点击链接也被无限卡死在网盘中（经典浏览器-服务器死锁）。
-*   **降维级破局**：我们彻底移除了 Nginx 原生的 Basic Auth 配置。改由 Lua 进程在内层执行 **`预签名 URL Token (?u=user&code=6位TOTP)`** 的纯无状态数学计算。当外部恶意流量未带此口令试探时，系统**绝对不返回 401 弹窗，而是静默、高保真重定向到您的网盘（返回 200）**。
-*   **302 洗刷与滑动 Cookie 顺延**：
-    1.  **302 地址清洗**：当您首次使用包含 `?u=aaron&code=123456` 的完整长链接访问时，Lua 极速验证成功，自动为您的设备种下一枚长效 Cookie，并**立刻执行 302 临时重定向，跳转到纯净无参的控制台短链接**。明文验证码在浏览器地址栏停留时间少于 0.1 秒，完美洗刷历史痕迹防泄漏！
-    2.  **滑动过期免密**：在随后的 30 天内（由 `RG_NGINX_SESSION_TTL_SECONDS` 控制），您的浏览器会自动携带 `gkp_session` Cookie。只要您在此期间刷新、点击过控制台，该 Cookie 的**有效存活时间会自动顺延 30 天**。您不再需要带上多余参数，免密、直入管理后台！
-
-### 2. 本地一键生成 TOTP 动态验证码（5分钟有效）
-
-因为系统默认的时间步长被对齐配置为了极度充裕的 **5 分钟（300 秒）**，极大地缓解了传统 Google Authenticator 30 秒倒计时的局促体验。
-
-您可以在本地电脑的控制台（如 MacOS / Linux 终端）中，运行以下极简的 Bash 一键命令，获取您当前的 6 位动态验证码：
-
-```bash
-# [Bash 一键生成 5分钟有效验证码]
-# 原理：根据当前 Unix 时间戳除以 300秒，结合种子密钥生成
-luajit -e '
-local bit = require("bit")
-local totp_secret = "YOUR_NGINX_USER_PASSWORD_OR_BASE32_SECRET" -- 替换为您的 NGINX_USER_PASSWORD 或 Base32 秘钥
-local interval = 300
-local current_time = os.time()
-
-local time_step = math.floor(current_time / interval)
-local T_bytes = string.char(
-    bit.band(bit.rshift(time_step, 56), 0xFF),
-    bit.band(bit.rshift(time_step, 48), 0xFF),
-    bit.band(bit.rshift(time_step, 40), 0xFF),
-    bit.band(bit.rshift(time_step, 32), 0xFF),
-    bit.band(bit.rshift(time_step, 24), 0xFF),
-    bit.band(bit.rshift(time_step, 16), 0xFF),
-    bit.band(bit.rshift(time_step, 8), 0xFF),
-    bit.band(time_step, 0xFF)
-)
-
-local hash = ngx and ngx.hmac_sha1(totp_secret, T_bytes) or require("crypto").hmac("sha1", totp_secret, T_bytes) -- 自适应
-local offset_byte = bit.band(hash:byte(#hash), 0x0F) + 1
-local binary = bit.bor(
-    bit.lshift(bit.band(hash:byte(offset_byte), 0x7F), 24),
-    bit.lshift(hash:byte(offset_byte+1), 16),
-    bit.lshift(hash:byte(offset_byte+2), 8),
-    hash:byte(offset_byte+3)
-)
-
-print(string.format("您当前的 5分钟 专属动态加白验证码为: %06d", binary % 1000000))
-'
-```
-
-## 🔒 5.5 极致安全防探测：多用户自适应 TOTP 动态口令与 302 洗刷
+> 历史说明：旧版曾使用 300 秒步长 + `ngx.redirect(302)` 洗刷地址栏；当前代码已统一为标准 30 秒 TOTP + 200 HTML 落地页跳转（见 3.4），下文以当前实现为准。
 
 为了在“无状态、不引入外部数据库（零 Redis/DB）”的前提下彻底杜绝管理控制台因弹窗引发扫描器提取指纹，系统重构并升级了行业顶尖的 **“自适应多用户账密/标准 30秒 TOTP + 均分时间滑动缓冲区”** 验证机制。
 
@@ -396,8 +351,8 @@ print(string.format("您当前的 5分钟 专属动态加白验证码为: %06d",
 *   **传统方案硬伤**：若为了隐形在首包直接返回 200 并反代网盘，浏览器由于其内置安全机制，在全新 clean 会话下**首次 GET 访问默认绝不主动发送 Authorization 头**。这会导致正常的加白长链直接被阻断并卡死在网盘中，陷入死锁。
 *   **降维级破局**：我们彻底移除了 Nginx 原生的 Basic Auth 401 弹窗模块。完全改由 Lua 进程在内层执行 **`预签名 URL 动态口令 (?u=user&code=6位TOTP)`** 的纯无状态数学计算。
 *   **100% 拒绝弹窗并保持无痕回落**：当外部恶意探测未提供口令（或口令错误）时，系统**绝对不发送任何 401 或 WWW-Authenticate 标头**，而是直接运行 `ngx.exec("@fallback")` 返回 `200` 并高保真反代您的网盘。对扫描器而言这只是网盘的一个普通无害接口，实现极致隐形。
-*   **302 洗刷与滑动 Cookie 顺延**：
-    1.  **302 地址清洗**：当您首次使用包含 `?u=bob&code=123456` 的完整长链接访问成功时，Lua 验证通过，自动写入 Session Cookie，并**立刻执行 302 临时重定向，跳转到纯净无参的控制台短链接**。明文验证码在浏览器地址栏停留时间少于 0.1 秒，完美洗刷历史痕迹防泄漏！
+*   **落地页洗刷与滑动 Cookie 顺延**：
+    1.  **落地页地址清洗**：当您首次使用包含 `?u=bob&code=123456` 的完整长链接访问成功时，Lua 验证通过，写入 Session Cookie，并返回 200 HTML 落地页（`meta refresh` + `window.location.replace(干净URL)`），明文验证码在地址栏停留极短即被洗刷。
     2.  **滑动过期免密**：在随后的 30 天内（由 `RG_NGINX_SESSION_TTL_SECONDS` 控制），您的浏览器会自动携带 `gkp_session` Cookie。只要您在此期间刷新、点击过控制台，该 Cookie 的**有效存活时间会自动顺延 30 天**。您不再需要带上多余参数，免密、直入管理后台！
 
 ---
@@ -430,7 +385,7 @@ javascript:(function(){var domain="YOUR_AUTH_DOMAIN";var prefix="YOUR_PATH_PREFI
 
 #### 💣 致命 Bug 复现链条
 1.  **高保真回落引火上身**：用户由于直接访问根目录或未授权，请求被 Nginx 静默 `ngx.exec("@fallback")` 转发给真实业务系统。因为真实业务是带有 PWA 缓存机制的单页应用 (SPA)，浏览器瞬间在本地注册了管理域名 `auth.yourdomain.com` 下的作用域为 `/` 的 Service Worker。
-2.  **302 跨站丢弃 Cookie**：用户随后通过书签跨站进行 TOTP 验证，Nginx 校验成功下发带有 `SameSite=Strict` 属性的 Cookie 并 302 重定向。但在**隐私模式**下，现代浏览器防弹跳追踪保护机制（Bounce Tracking Mitigation）会强制在跨站重定向链路中**清洗并丢弃**该 Cookie。
+2.  **旧 302 跨站丢弃 Cookie（已修复）**：旧实现校验成功下发带有 `SameSite=Strict` 属性的 Cookie 并 302 重定向。在**隐私模式**下，现代浏览器防弹跳追踪保护机制会强制在跨站重定向链路中**清洗并丢弃**该 Cookie。现已改为 200 落地页 + `SameSite=Lax; Secure`，见下文。
 3.  **SW 幽灵劫持**：浏览器在干净 URL 下因为缺少 Cookie，再次被 Nginx 静默转至 `@fallback`（即真实业务 SPA）。此时，已经被注册的 Service Worker 被激活，它强制将所有的非静态资源导航请求**用本地缓存的 index.html 覆盖**。最终，导致控制台永远无法呈现，而是反复套娃渲染出真实业务的主页，并在 2 秒内疯狂发起 API 以及 locales 多语言拉取请求。
 
 #### 🛠️ 终极密码学与协议层加固方案

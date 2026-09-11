@@ -13,8 +13,10 @@ RUN mkdir -p /app /etc/nginx/ssl /var/www/html
 # 设置工作目录
 WORKDIR /app
 
-# 拷贝项目文件
+# 拷贝项目文件（.dockerignore 排除 ssl/*.pem、.git 等敏感/冗余内容，防私钥烘焙进镜像层）
 COPY . /app
+# 🛡️ 构建期清理：即使 .dockerignore 缺失，也绝不把宿主机私钥烘焙进镜像层
+RUN rm -rf /app/ssl/*.pem /app/ssl/*.key /app/acme_cache 2>/dev/null || true
 
 # 支持在编译构建镜像时，直接将 Lego 或本地 Actions 申请好的证书一键复制 to 运行时证书目录
 RUN if [ -d "/app/ssl" ] && [ "$(ls -A /app/ssl 2>/dev/null)" ]; then \
@@ -33,8 +35,8 @@ RUN mv /app/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /app/scripts/bootstrap.sh
 
-# 暴露端口：80 (ACME HTTP-01 验证), 443 (HTTPS 代理与伪装网站端口)
-EXPOSE 80 443
+# 暴露端口：443 (HTTPS 代理与伪装网站端口；本镜像不监听 80)
+EXPOSE 443
 
 STOPSIGNAL SIGTERM
 
