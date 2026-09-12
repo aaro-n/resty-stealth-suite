@@ -109,8 +109,10 @@ http {
 
     # 🎯 [极致时延调优] 缩减 SSL 缓冲区包长（默认高达 16k），使得代理数据（如推特小碎片图）无需等待攒够 16k 块即可立刻被客户端解密渲染，大幅提升首屏加载的响应时延（TTFB）
     ssl_buffer_size 4k;
-    
+
     types_hash_max_size 2048;
+    server_names_hash_bucket_size 128;
+    server_names_hash_max_size 512;
 
     # DNS 解析器（原生正向代理必须）
     resolver ${DNS_RESOLVER} valid=300s;
