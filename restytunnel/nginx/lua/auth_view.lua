@@ -252,6 +252,9 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
 
         if ('serviceWorker' in navigator) {
             // 1. 注册控制台专属 PWA 磁贴 Service Worker (gkp-sw.js)
+            // 注意：绝不在每次页面加载时无条件注销非 gkp SW，否则 SW 注销会触发
+            // controllerchange + 页面 reload 死循环（表现为 POST 后浏览器一直转圈）。
+            // 仅当确实存在非控制台 SW 污染时才清理，且清理后只 reload 一次。
             navigator.serviceWorker.register('/gkp-sw.js').then(function(reg) {
                 console.log('RestyTunnel: Registered Console PWA SW under scope:', reg.scope);
             }).catch(function(err) {
@@ -259,21 +262,34 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
             });
 
             // 2. 深度扫描并注销其他所有被污染残留的 Service Workers (如网盘 SW)，彻底洗白！
-            navigator.serviceWorker.getRegistrations().then(function(registrations) {
-                for (let registration of registrations) {
-                    var scriptURL = (registration.active || registration.installing || registration.waiting || {}).scriptURL || '';
-                    if (scriptURL && !scriptURL.includes('gkp-sw.js')) {
-                        registration.unregister().then(function(success) {
-                            if (success) {
-                                console.log('RestyTunnel: Cleaned hostile SW:', scriptURL);
-                                window.location.reload();
+            // 防抖：同一会话只自动清理一次，避免 unregister -> reload -> 再清理的无限转圈。
+            try {
+                if (!sessionStorage.getItem('gkp_sw_cleaned')) {
+                    navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                        var cleaned = false;
+                        var promises = [];
+                        for (let registration of registrations) {
+                            var scriptURL = (registration.active || registration.installing || registration.waiting || {}).scriptURL || '';
+                            if (scriptURL && !scriptURL.includes('gkp-sw.js')) {
+                                promises.push(registration.unregister());
+                                cleaned = true;
                             }
-                        });
-                    }
+                        }
+                        if (cleaned) {
+                            sessionStorage.setItem('gkp_sw_cleaned', '1');
+                            Promise.all(promises).then(function() {
+                                window.location.reload();
+                            }).catch(function(err) {
+                                console.error('RestyTunnel SW cleanup error:', err);
+                            });
+                        }
+                    }).catch(function(err) {
+                        console.error('RestyTunnel SW cleanup error:', err);
+                    });
                 }
-            }).catch(function(err) {
-                console.error('RestyTunnel SW cleanup error:', err);
-            });
+            } catch (e) {
+                console.error('RestyTunnel SW cleanup error:', e);
+            }
         }
     </script>
 </body>

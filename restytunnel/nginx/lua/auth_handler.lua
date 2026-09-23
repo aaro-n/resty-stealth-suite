@@ -164,6 +164,9 @@ local function check_stealth_auth()
         if cookie_user and cookie_token and session.verify(cookie_user, cookie_token, users_db) then
             local session_ttl = config.session_ttl_seconds or 2592000
             -- 滑动续期：重新签发（旧 token 仍在有效期内可用，新 token 覆盖写回）
+            -- 注意：此处绝不发送 Clear-Site-Data，否则每次 POST/GET 都会清空
+            -- ServiceWorker 与存储，导致页面 JS 反复注册/注销 SW、浏览器转圈。
+            -- 清存储只应在登录跳板页做一次（见下方 URL 参数登录分支）。
             local new_token = session.issue(cookie_user, users_db[cookie_user], session_ttl)
             if new_token then
                 ngx.header["Set-Cookie"] = {
@@ -172,7 +175,6 @@ local function check_stealth_auth()
                     "gkp_active=1; Path=/; Max-Age=" .. session_ttl .. "; SameSite=Lax; Secure"
                 }
             end
-            ngx.header["Clear-Site-Data"] = '"storage"'
 
             local client_real_ip = ngx.var.remote_addr or "unknown"
             ngx.log(ngx.NOTICE, "🔑 [认证通过] - 客户端 IP: '", client_real_ip, "', 用户: '", cookie_user, "', 认证方式: '签名 Cookie 会话', 结果: 成功直接直入控制台。")
