@@ -120,11 +120,12 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
         .btn-allow { background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85em; transition: background 0.2s; white-space: nowrap; }
         .btn-allow:hover { background: #218838; }
 
-        /* 表格排版 */
-        .table-container { overflow-x: auto; max-height: 250px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; margin-bottom: 5px; }
+        /* 表格排版：桌面端自适应，移动端横向滚动防竖排 */
+        .table-container { overflow-x: auto; max-height: 250px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; margin-bottom: 5px; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9em; }
-        th { background-color: #f8f9fa; padding: 12px; font-weight: 600; color: #495057; border-bottom: 2px solid #dee2e6; position: sticky; top: 0; z-index: 10; }
+        th { background-color: #f8f9fa; padding: 12px; font-weight: 600; color: #495057; border-bottom: 2px solid #dee2e6; position: sticky; top: 0; z-index: 10; white-space: nowrap; }
         td { padding: 10px 12px; border-bottom: 1px solid #dee2e6; vertical-align: middle; }
+        td code { white-space: nowrap; word-break: keep-all; }
         
         .badge { display: inline-block; padding: 2px 6px; font-size: 0.8em; font-weight: 600; border-radius: 4px; }
         .badge-success { background-color: #d4edda; color: #155724; }
@@ -138,7 +139,7 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
         .table-container::-webkit-scrollbar { width: 6px; height: 6px; }
         .table-container::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
 
-        /* 📱 极致移动端自适应流式排版优化 */
+        /* 📱 移动端：表格横向滚动，IP/表头强制横排不竖排 */
         @media (max-width: 600px) {
             body { margin: 10px auto; padding: 10px; font-size: 14px; }
             .card { padding: 15px; border-radius: 8px; margin-bottom: 15px; }
@@ -148,10 +149,12 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
             input[type="text"] { width: 100%; padding: 10px; font-size: 15px; }
             .btn-group { flex-direction: column; width: 100%; gap: 8px; }
             .btn { width: 100%; padding: 10px; font-size: 15px; text-align: center; }
-            td, th { padding: 8px; font-size: 13px; }
-            /* 让超长的 IPv6 或是 IP 在小屏幕下能自动无损折行，绝不撑大撑变形卡片 */
-            td code { word-break: break-all; white-space: normal; display: inline-block; max-width: 100%; }
-            .reason-cell { max-width: 110px; font-size: 12px; }
+            /* 表格不再硬挤进屏幕，而是横向滚动：彻底杜绝 IP/表头被压成竖排 */
+            .table-container { overflow-x: auto; }
+            table { min-width: 620px; }
+            td, th { padding: 8px 10px; font-size: 13px; white-space: nowrap; }
+            td code { white-space: nowrap; word-break: keep-all; display: inline-block; }
+            .reason-cell { max-width: 180px; font-size: 12px; }
         }
     </style>
 </head>
