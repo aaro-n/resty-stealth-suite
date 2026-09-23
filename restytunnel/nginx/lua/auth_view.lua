@@ -21,7 +21,7 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
     
     if success ~= nil then
         if success then
-            status_box = "<div class='status-box success-box'>✅ <strong>白名单授权成功</strong>：您的 IP <code>" .. ip_val .. "</code> 已成功加入授权白名单！</div>"
+            status_box = "<div class='status-box success-box'>✅ <strong>白名单授权成功</strong>：IP <code>" .. ip_val .. "</code> 已成功加入授权白名单！</div>"
         else
             status_box = "<div class='status-box error-box'>❌ <strong>写入失败</strong>：无法写入白名单，原因: " .. html_escape(err) .. "</div>"
         end
@@ -67,7 +67,7 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
     local rejected_html = ""
     local enable_view_blacklist = config.enable_view_blacklist
     if enable_view_blacklist ~= "true" then
-        rejected_html = "<tr><td colspan='4' style='text-align:center; color:#db5858; padding:20px; font-weight:500;'>🔒 [该模块已由管理员开启安全可见性屏蔽，禁止查看]</td></tr>"
+        rejected_html = "<tr><td colspan='5' style='text-align:center; color:#db5858; padding:20px; font-weight:500;'>🔒 [该模块已由管理员开启安全可见性屏蔽，禁止查看]</td></tr>"
     elseif rejected_logs and #rejected_logs > 0 then
         for _, log in ipairs(rejected_logs) do
             rejected_html = rejected_html .. string.format([[
@@ -76,11 +76,18 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
                     <td><code>%s</code></td>
                     <td><span class="badge badge-error">已拒绝</span></td>
                     <td class="reason-cell" title="%s">%s</td>
+                    <td>
+                        <form method="POST" action="" style="display:inline; margin:0; padding:0;">
+                            <input type="hidden" name="action" value="add">
+                            <input type="hidden" name="ip" value="%s">
+                            <button type="submit" class="btn-allow" onclick="return confirm('确定要为该 IP ' + this.form.ip.value + ' 加白吗？加白后将自动清除其黑名单记录。')">✅ 加白</button>
+                        </form>
+                    </td>
                 </tr>
-            ]], html_escape(log.time), html_escape(log.ip), html_escape(log.reason), html_escape(log.reason))
+            ]], html_escape(log.time), html_escape(log.ip), html_escape(log.reason), html_escape(log.reason), html_escape(log.ip))
         end
     else
-        rejected_html = "<tr><td colspan='4' style='text-align:center; color:#999; padding:20px;'>🍃 暂无探测被拒阻断日志</td></tr>"
+        rejected_html = "<tr><td colspan='5' style='text-align:center; color:#999; padding:20px;'>🍃 暂无探测被拒阻断日志</td></tr>"
     end
 
     local html_template = [[
@@ -110,6 +117,8 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
         .btn-secondary:hover { background: #5a6268; }
         .btn-delete { background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85em; transition: background 0.2s; }
         .btn-delete:hover { background: #bd2130; }
+        .btn-allow { background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85em; transition: background 0.2s; white-space: nowrap; }
+        .btn-allow:hover { background: #218838; }
 
         /* 表格排版 */
         .table-container { overflow-x: auto; max-height: 250px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; margin-bottom: 5px; }
@@ -203,6 +212,7 @@ function _M.render(visitor_ip, ip_to_add, success, err, whitelist_entries, rejec
                         <th>探测 IP</th>
                         <th>防御动作</th>
                         <th>拦截原因</th>
+                        <th>操作</th>
                     </tr>
                 </thead>
                 <tbody>

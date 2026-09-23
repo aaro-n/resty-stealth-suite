@@ -331,12 +331,34 @@ if method == "POST" then
     if args then
         local action = args.action or "add"
         
-        -- A. 手动精准添加白名单 IP（仅允许为本连接 IP 加白：登录态只证明身份，不授予任意写 IP 权限）
+        -- A. 手动/一键添加白名单 IP（已登录管理员可为任意合法 IP 加白；异地加白需同源 Referer/Origin 校验防 CSRF）
         if action == "add" and args.ip then
             local submitted_ip = string.match(args.ip, "^%s*(.-)%s*$")
             if submitted_ip ~= "" then
-                if submitted_ip ~= visitor_ip then
-                    success, err = false, "仅允许为当前连接 IP 加白"
+                if not iputil.is_valid_ip(submitted_ip) then
+                    success, err = false, "IP 格式非法，拒绝写入"
+                elseif submitted_ip ~= visitor_ip then
+                    -- 异地加白：校验同源（防跨站 CSRF 盗用登录态给攻击者 IP 加白）
+                    local origin = headers["Origin"] or headers["origin"]
+                    local referer = headers["Referer"] or headers["referer"]
+                    -- Host 在 H2 下可能仅以小写出现，兜底取 ngx 变量保证非空
+                    local host = headers["Host"] or headers["host"] or ngx.var.host or ngx.var.http_host or ""
+                    local function is_same_origin(url_or_origin)
+                        if not url_or_origin or url_or_origin == "" then return false end
+                        -- Origin: https://auth.example.com:2096 ；Referer: https://auth.example.com:2096/xxx
+                        -- Host: auth.example.com:2096（带端口，需整体比对）
+                        local req_host = string.match(url_or_origin, "^https?://([^/]+)") or url_or_origin
+                        return req_host == host
+                    end
+                    if not (is_same_origin(origin) or is_same_origin(referer)) then
+                        ngx.log(ngx.WARN, "[auth] 跨站异地加白已拦截: visitor=", visitor_ip, " target=", submitted_ip,
+                            " origin=", tostring(origin), " referer=", tostring(referer), " host=", tostring(host))
+                        success, err = false, "跨站请求已拦截：异地加白仅允许站内操作"
+                    else
+                        ngx.log(ngx.NOTICE, "[auth] 异地加白: 管理员 ", visitor_ip, " 为 ", submitted_ip, " 加白（同源校验通过）。")
+                        ip_to_add = submitted_ip
+                        success, err = whitelist.add(ip_to_add)
+                    end
                 else
                     ip_to_add = submitted_ip
                     success, err = whitelist.add(ip_to_add)
